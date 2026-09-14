@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+
+# Environment variables (never commit secrets)
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+client/.env
+client/.env.local
+client/.env.development
+client/.env.development.local
+client/.env.test
+client/.env.test.local
+client/.env.production
+client/.env.production.local
+server/.env
+server/.env.local
+server/.env.development
+server/.env.development.local
+server/.env.test
+server/.env.test.local
+server/.env.production
+server/.env.production.local
+# .env.example is intentionally NOT ignored — it must be committed
+
+# Next.js build output
+.next/
+client/.next/
+out/
+client/out/
+
+# Node/Express build output
+dist/
+build/
+server/dist/
+server/build/
+
+# Test coverage
+coverage/
+client/coverage/
+server/coverage/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# TypeScript build info
+*.tsbuildinfo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Misc
+*.pem
+.turbo/
