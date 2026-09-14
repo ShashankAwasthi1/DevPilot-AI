@@ -52,3 +52,24 @@ export interface ActivityItem {
   metadata: Record<string, unknown> | null;
   createdAt: string;
 }
+
+// Mirrors server/src/services/conversation.service.ts's ConversationDto.
+export interface ConversationSummary {
+  id: string;
+  projectId: string;
+  userId: string;
+  title: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Mirrors server/src/services/message.service.ts's MessageDto.
+export type ChatMessageRole = "USER" | "ASSISTANT";
+
+export interface ChatMessage {
+  id: string;
+  conversationId: string;
+  role: ChatMessageRole;
+  content: string;
+  createdAt: string;
+}

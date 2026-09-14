@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { FolderKanban } from "lucide-react";
+import { FolderKanban, MessageSquare } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
@@ -68,9 +70,17 @@ export function ProjectsSection() {
                 <CardHeader>
                   <CardTitle className="text-base">{project.name}</CardTitle>
                 </CardHeader>
-                <CardContent className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>{ROLE_LABEL[project.role]}</span>
-                  <span>Updated {formatRelativeTime(project.updatedAt)}</span>
+                <CardContent className="flex flex-col gap-3">
+                  <div className="flex items-center justify-between text-sm text-muted-foreground">
+                    <span>{ROLE_LABEL[project.role]}</span>
+                    <span>Updated {formatRelativeTime(project.updatedAt)}</span>
+                  </div>
+                  <Button variant="outline" size="sm" className="w-fit gap-1.5" asChild>
+                    <Link href={`/projects/${project.id}/chat`}>
+                      <MessageSquare className="size-3.5" aria-hidden="true" />
+                      Chat
+                    </Link>
+                  </Button>
                 </CardContent>
               </Card>
             </motion.div>

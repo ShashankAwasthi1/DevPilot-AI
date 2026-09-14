@@ -1,4 +1,7 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1";
+// Exported so lib/ai-chat.ts (which needs raw fetch/streaming, not this
+// file's JSON-envelope request()) can target the same base URL without
+// duplicating the env var/fallback logic.
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080/api/v1";
 
 // Mirrors the shape every server/src/utils/AppError.ts response takes:
 // { status: "ok", data } on success, { status: "error", message, details? }

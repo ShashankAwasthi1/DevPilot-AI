@@ -44,6 +44,11 @@ enum NotificationType {
   TASK_COMMENT_CREATED
 }
 
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -62,6 +67,7 @@ model User {
   activities    Activity[]
   notifications Notification[]
   documents     Document[]
+  conversations Conversation[]
 
   @@map("users")
 }
@@ -92,8 +98,9 @@ model Project {
   owner      User            @relation("ProjectOwner", fields: [ownerId], references: [id])
   members    ProjectMember[]
   tasks      Task[]
-  activities Activity[]
-  documents  Document[]
+  activities    Activity[]
+  documents     Document[]
+  conversations Conversation[]
 
   @@index([ownerId])
   @@map("projects")
@@ -203,4 +210,36 @@ model Document {
   @@index([projectId, archivedAt, createdAt])
   @@index([authorId])
   @@map("documents")
+}
+
+// Conversations are per-user within a project (not shared/team chat) - kept
+// deliberately simple for Phase 12. Read-only AI chat; no toolCalls/usage
+// columns yet, those belong to the tool-calling and usage-tracking phases.
+model Conversation {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  title     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([projectId, userId, createdAt, id])
+  @@map("conversations")
+}
+
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt, id])
+  @@map("messages")
 }

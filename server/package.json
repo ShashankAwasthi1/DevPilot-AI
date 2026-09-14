@@ -10,6 +10,7 @@
     "start": "node dist/server.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
     "@prisma/client": "^6.19.3",
     "argon2": "^0.45.1",
     "cookie-parser": "^1.4.7",

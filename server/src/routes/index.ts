@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authRoutes from "./auth.routes";
 import commentRoutes from "./comment.routes";
+import conversationRoutes from "./conversation.routes";
 import dashboardRoutes from "./dashboard.routes";
 import documentRoutes from "./document.routes";
 import healthRoutes from "./health.routes";
@@ -15,6 +16,7 @@ router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/projects", projectRoutes);
 router.use("/projects", documentRoutes);
+router.use("/projects", conversationRoutes);
 router.use("/tasks", commentRoutes);
 router.use("/notifications", notificationRoutes);
 router.use("/dashboard", dashboardRoutes);
