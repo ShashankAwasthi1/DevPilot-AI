@@ -1,11 +1,13 @@
 import { NextFunction, Request, Response } from "express";
-import { getAIProvider } from "../ai";
+import { runChatTurn } from "../ai/tool-loop";
 import { AI_LIMITS } from "../ai/limits";
 import { buildSystemPrompt } from "../ai/prompt";
 import { buildProjectContext } from "../services/ai-context.service";
 import * as messageService from "../services/message.service";
+import type { ProviderMessage } from "../ai/provider";
 
-// Streams the assistant's reply back over SSE as it's generated. Two
+// Streams the assistant's reply back over SSE as it's generated, delegating
+// the multi-round tool-calling orchestration to ai/tool-loop.ts. Two
 // distinct error-handling phases: anything before headers are written can
 // still go through the normal Express error middleware (next(err)); once
 // streaming has started, an error must be written as an SSE frame instead,
@@ -14,9 +16,8 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
   const { projectId, id: conversationId } = req.params;
   const userId = req.user!.id;
 
-  let history: Awaited<ReturnType<typeof messageService.listRecentHistory>>;
   let systemPrompt: string;
-  let provider: ReturnType<typeof getAIProvider>;
+  let history: ProviderMessage[];
 
   try {
     await messageService.assertConversationWritable(userId, projectId, conversationId);
@@ -24,11 +25,14 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
 
     const context = await buildProjectContext(userId, projectId);
     systemPrompt = buildSystemPrompt(context);
-    history = await messageService.listRecentHistory(conversationId, AI_LIMITS.MAX_HISTORY_MESSAGES);
-    // Resolved before headers are written so a missing/misconfigured AI
-    // provider (e.g. ANTHROPIC_API_KEY not set) is reported through the
-    // normal error middleware as a clean 500, not a hung streaming response.
-    provider = getAIProvider();
+
+    // Includes the just-appended user message, since it's now the most
+    // recent row for this conversation.
+    const recent = await messageService.listRecentHistory(conversationId, AI_LIMITS.MAX_HISTORY_MESSAGES);
+    history = recent.map((message) => ({
+      role: message.role === "USER" ? "user" : "assistant",
+      content: message.content,
+    }));
   } catch (err) {
     next(err);
     return;
@@ -45,29 +49,35 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
   });
   res.flushHeaders();
 
-  let assistantText = "";
+  let finalText = "";
 
   try {
-    for await (const delta of provider.streamReply({
+    for await (const event of runChatTurn({
       systemPrompt,
-      history: history.map((message) => ({
-        role: message.role === "USER" ? "user" : "assistant",
-        content: message.content,
-      })),
-      maxOutputTokens: AI_LIMITS.MAX_OUTPUT_TOKENS,
+      history,
+      toolContext: { userId, projectId },
       signal: abortController.signal,
     })) {
-      assistantText += delta;
-      res.write(`data: ${JSON.stringify({ delta })}\n\n`);
+      if (event.type === "text") {
+        res.write(`data: ${JSON.stringify({ delta: event.text })}\n\n`);
+      } else if (event.type === "tool_call") {
+        // Only the tool name and its (already Zod-bounded, model-supplied)
+        // input are exposed - never the raw tool result.
+        res.write(`event: tool_call\ndata: ${JSON.stringify({ name: event.name, input: event.input })}\n\n`);
+      } else if (event.type === "tool_result") {
+        res.write(`event: tool_result\ndata: ${JSON.stringify({ name: event.name, ok: event.ok })}\n\n`);
+      } else if (event.type === "done") {
+        finalText = event.text;
+      }
     }
 
-    // Persisted only after the provider's stream fully completes - a
-    // dropped client connection never leaves a partial/garbled row, and an
-    // aborted or failed generation is not persisted at all (no retry
-    // feature in Phase 12, so a half-written assistant turn would just be
-    // confusing rather than useful).
-    if (assistantText.length > 0) {
-      await messageService.appendMessage(conversationId, "ASSISTANT", assistantText);
+    // Persisted only after the whole turn (all rounds/tool calls) fully
+    // completes - a dropped client connection never leaves a partial or
+    // garbled row, and an aborted or failed generation is not persisted at
+    // all (no retry feature in Phase 12/13, so a half-written assistant
+    // turn would just be confusing rather than useful).
+    if (finalText.length > 0) {
+      await messageService.appendMessage(conversationId, "ASSISTANT", finalText);
     }
 
     res.write("event: done\ndata: {}\n\n");

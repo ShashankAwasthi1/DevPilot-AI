@@ -58,17 +58,34 @@ export async function recordActivity(
 export async function listActivityForProject(
   userId: string,
   projectId: string,
+  limit?: number,
 ): Promise<ActivityDto[]> {
   // Any role (OWNER/ADMIN/MEMBER/VIEWER) may view activity; getProjectAccess
   // already returns 404 for a nonexistent/inaccessible project, so no
   // further role check is needed here.
   await getProjectAccess(projectId, userId);
 
+  if (limit === undefined) {
+    // Existing, unbounded behavior - unchanged for the public
+    // GET /projects/:id/activity route (activity.controller.ts), which has
+    // always returned the full history oldest-first.
+    const activities = await prisma.activity.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "asc" },
+    });
+    return activities.map(toActivityDto);
+  }
+
+  // Bounded path, added for the AI getActivity tool: fetch only the N most
+  // recent rows at the database level. Ordered by createdAt + id (not
+  // createdAt alone, which isn't guaranteed unique) for deterministic
+  // results, matching the rest of the codebase's list-ordering convention.
+  // Already newest-first - no in-memory slicing or reversing needed.
   const activities = await prisma.activity.findMany({
     where: { projectId },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit,
   });
-
   return activities.map(toActivityDto);
 }
 

@@ -17,4 +17,11 @@ export function getAIProvider(): AIProvider {
   }
 }
 
-export type { AIProvider, ChatMessageInput, StreamReplyParams } from "./provider";
+export type {
+  AIProvider,
+  ProviderContentBlock,
+  ProviderMessage,
+  ProviderToolSpec,
+  StreamEvent,
+  StreamTurnParams,
+} from "./provider";
