@@ -43,13 +43,13 @@ function computeRole(project: ProjectWithCallerMembership, userId: string): Proj
   return project.members[0]?.role ?? null;
 }
 
-function assertRole(role: ProjectRole, allowed: ProjectRole[]): void {
+export function assertRole(role: ProjectRole, allowed: ProjectRole[]): void {
   if (!allowed.includes(role)) {
     throw new AppError(403, "You do not have permission to perform this action");
   }
 }
 
-interface ProjectAccess {
+export interface ProjectAccess {
   project: Project;
   role: ProjectRole;
 }
@@ -57,8 +57,10 @@ interface ProjectAccess {
 // The single place that decides "can this user touch this project, and as
 // what role". Every read/write below goes through this - never a bare
 // findUnique/update by id alone - so access control can't be bypassed by
-// forgetting a check in some new handler later.
-async function getProjectAccess(projectId: string, userId: string): Promise<ProjectAccess> {
+// forgetting a check in some new handler later. Exported so other entities
+// that hang off a project (tasks, comments, activity) reuse this instead of
+// re-implementing project-access resolution.
+export async function getProjectAccess(projectId: string, userId: string): Promise<ProjectAccess> {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: { members: { where: { userId }, select: { role: true } } },

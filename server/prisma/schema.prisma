@@ -32,6 +32,10 @@ enum TaskPriority {
   URGENT
 }
 
+enum ActivityType {
+  COMMENT_CREATED
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -47,6 +51,7 @@ model User {
   assignedTasks Task[]          @relation("TaskAssignee")
   comments      Comment[]
   sessions      Session[]
+  activities    Activity[]
 
   @@map("users")
 }
@@ -74,9 +79,10 @@ model Project {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  owner   User            @relation("ProjectOwner", fields: [ownerId], references: [id])
-  members ProjectMember[]
-  tasks   Task[]
+  owner      User            @relation("ProjectOwner", fields: [ownerId], references: [id])
+  members    ProjectMember[]
+  tasks      Task[]
+  activities Activity[]
 
   @@index([ownerId])
   @@map("projects")
@@ -110,10 +116,11 @@ model Task {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  assignee  User?     @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
-  createdBy User      @relation("TaskCreatedBy", fields: [createdById], references: [id])
-  comments  Comment[]
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee   User?      @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy  User       @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  comments   Comment[]
+  activities Activity[]
 
   @@index([projectId, status])
   @@index([assigneeId])
@@ -131,6 +138,25 @@ model Comment {
   task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   author User @relation(fields: [authorId], references: [id])
 
-  @@index([taskId])
+  @@index([taskId, createdAt])
   @@map("comments")
+}
+
+model Activity {
+  id        String       @id @default(cuid())
+  projectId String
+  taskId    String?
+  actorId   String?
+  type      ActivityType
+  metadata  Json?
+  createdAt DateTime     @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task    Task?   @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  actor   User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([taskId])
+  @@index([actorId])
+  @@map("activities")
 }
