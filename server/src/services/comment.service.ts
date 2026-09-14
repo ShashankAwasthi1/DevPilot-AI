@@ -2,6 +2,7 @@ import { Comment } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { assertRole } from "./project.service";
 import { recordActivity } from "./activity.service";
+import { createNotification } from "./notification.service";
 import { getTaskAccess } from "./task.service";
 import type { CreateCommentInput } from "../validation/comment.validation";
 
@@ -45,12 +46,13 @@ export async function createComment(
   taskId: string,
   input: CreateCommentInput,
 ): Promise<CommentDto> {
-  const { projectId, role } = await getTaskAccess(taskId, userId);
+  const { task, projectId, role } = await getTaskAccess(taskId, userId);
   assertRole(role, ["OWNER", "ADMIN", "MEMBER"]);
 
-  // The comment and the activity record describing it must never diverge -
-  // one succeeds and the other silently fails - so both writes happen in a
-  // single transaction.
+  // The comment, the activity record, and the assignee's notification must
+  // never diverge - any one succeeding while another silently fails would
+  // leave inconsistent state - so all three writes happen in a single
+  // transaction.
   const comment = await prisma.$transaction(async (tx) => {
     const created = await tx.comment.create({
       data: {
@@ -67,6 +69,21 @@ export async function createComment(
       type: "COMMENT_CREATED",
       metadata: { commentId: created.id },
     });
+
+    // Notify the task's assignee, if any - but never notify someone of
+    // their own comment.
+    if (task.assigneeId && task.assigneeId !== userId) {
+      await createNotification(tx, {
+        userId: task.assigneeId,
+        type: "TASK_COMMENT_CREATED",
+        metadata: {
+          taskId,
+          commentId: created.id,
+          projectId,
+          actorId: userId,
+        },
+      });
+    }
 
     return created;
   });

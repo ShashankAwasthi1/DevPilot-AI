@@ -36,6 +36,10 @@ enum ActivityType {
   COMMENT_CREATED
 }
 
+enum NotificationType {
+  TASK_COMMENT_CREATED
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -52,6 +56,7 @@ model User {
   comments      Comment[]
   sessions      Session[]
   activities    Activity[]
+  notifications Notification[]
 
   @@map("users")
 }
@@ -159,4 +164,18 @@ model Activity {
   @@index([taskId])
   @@index([actorId])
   @@map("activities")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  metadata  Json?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
 }
