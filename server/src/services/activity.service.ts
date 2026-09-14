@@ -71,3 +71,22 @@ export async function listActivityForProject(
 
   return activities.map(toActivityDto);
 }
+
+// Cross-project feed for the dashboard - same ownership/membership scoping
+// idiom as project.service.ts's listProjectsForUser, just reached through
+// the project relation instead of the Project table itself. No separate
+// role check needed: a project the user has no relationship to is already
+// excluded by this same OR clause.
+export async function listActivityForUser(userId: string, limit: number): Promise<ActivityDto[]> {
+  const activities = await prisma.activity.findMany({
+    where: {
+      project: {
+        OR: [{ ownerId: userId }, { members: { some: { userId } } }],
+      },
+    },
+    orderBy: { createdAt: "desc" },
+    take: limit,
+  });
+
+  return activities.map(toActivityDto);
+}
