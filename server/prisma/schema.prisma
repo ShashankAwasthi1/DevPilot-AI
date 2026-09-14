@@ -7,8 +7,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
 }
 
 enum ProjectMemberRole {
@@ -34,6 +35,9 @@ enum TaskPriority {
 
 enum ActivityType {
   COMMENT_CREATED
+  DOCUMENT_CREATED
+  DOCUMENT_UPDATED
+  DOCUMENT_ARCHIVED
 }
 
 enum NotificationType {
@@ -57,6 +61,7 @@ model User {
   sessions      Session[]
   activities    Activity[]
   notifications Notification[]
+  documents     Document[]
 
   @@map("users")
 }
@@ -88,6 +93,7 @@ model Project {
   members    ProjectMember[]
   tasks      Task[]
   activities Activity[]
+  documents  Document[]
 
   @@index([ownerId])
   @@map("projects")
@@ -178,4 +184,23 @@ model Notification {
 
   @@index([userId, readAt, createdAt])
   @@map("notifications")
+}
+
+model Document {
+  id         String    @id @default(cuid())
+  projectId  String
+  authorId   String
+  title      String
+  content    String
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  author  User    @relation(fields: [authorId], references: [id])
+
+  @@index([projectId])
+  @@index([projectId, archivedAt, createdAt])
+  @@index([authorId])
+  @@map("documents")
 }
