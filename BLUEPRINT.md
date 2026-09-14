@@ -2,6 +2,8 @@
 
 Status: Planning document. No implementation yet. This is the reference we build every phase against.
 
+> **Implementation note (Phase 11):** as of Phase 2, the backend is a separate Express + TypeScript service, not Next.js API routes as described in §15/16/21/24. See [docs/adr/0001-separate-express-backend.md](docs/adr/0001-separate-express-backend.md). Sections below are retained as original planning context and have not been updated to reflect this.
+
 ---
 
 ## 1. Product Overview
