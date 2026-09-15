@@ -10,6 +10,7 @@ import { CreateTaskSheet } from "@/components/tasks/create-task-sheet";
 import { TaskList } from "@/components/tasks/task-list";
 import { api } from "@/lib/api";
 import { useApiData } from "@/lib/use-api-data";
+import { useProjectMembers } from "@/lib/use-project-members";
 import { useTasks } from "@/lib/use-tasks";
 import type { ProjectSummary, SafeUser } from "@/lib/types";
 
@@ -50,6 +51,15 @@ export default function ProjectWorkspacePage(props: PageProps<"/projects/[id]">)
     fetchTask,
   } = useTasks(projectId);
 
+  // One project-level members fetch, shared by the create form and every
+  // row's edit form - never refetched per-row/per-open.
+  const {
+    members,
+    loading: membersLoading,
+    error: membersError,
+    refresh: refreshMembers,
+  } = useProjectMembers(projectId);
+
   if (authLoading || authError || !user) {
     return (
       <main className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-10 sm:px-6">
@@ -85,7 +95,13 @@ export default function ProjectWorkspacePage(props: PageProps<"/projects/[id]">)
           <h2 id="tasks-heading" className="text-sm font-medium text-muted-foreground">
             Tasks
           </h2>
-          <CreateTaskSheet onCreate={createTask} />
+          <CreateTaskSheet
+            onCreate={createTask}
+            members={members ?? []}
+            membersLoading={membersLoading}
+            membersError={membersError}
+            onRetryMembers={refreshMembers}
+          />
         </div>
 
         <TaskList
@@ -97,6 +113,10 @@ export default function ProjectWorkspacePage(props: PageProps<"/projects/[id]">)
           fetchTask={fetchTask}
           onUpdate={updateTask}
           onDelete={deleteTask}
+          members={members ?? []}
+          membersLoading={membersLoading}
+          membersError={membersError}
+          onRetryMembers={refreshMembers}
         />
       </section>
     </main>

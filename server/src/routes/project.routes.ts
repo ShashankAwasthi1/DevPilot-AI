@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { listActivity } from "../controllers/activity.controller";
+import { listProjectMembers } from "../controllers/project-member.controller";
 import {
   archiveProject,
   createProject,
@@ -19,5 +20,6 @@ router.get("/:id", requireAuth, getProject);
 router.patch("/:id", requireAuth, validate(updateProjectSchema), updateProject);
 router.delete("/:id", requireAuth, archiveProject);
 router.get("/:id/activity", requireAuth, listActivity);
+router.get("/:id/members", requireAuth, listProjectMembers);
 
 export default router;

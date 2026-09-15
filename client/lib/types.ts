@@ -111,3 +111,14 @@ export interface TaskSummary {
   priority: TaskPriority;
   assigneeName: string | null;
 }
+
+// Mirrors server/src/services/project-member.service.ts's
+// ProjectMemberDto - returned by GET /projects/:projectId/members. Used
+// exclusively to build the real assignee picker (Phase 16 Step 9 Part
+// 10); never a source of auth secrets or any other private field.
+export interface ProjectMember {
+  userId: string;
+  name: string | null;
+  email: string;
+  role: ProjectRole;
+}

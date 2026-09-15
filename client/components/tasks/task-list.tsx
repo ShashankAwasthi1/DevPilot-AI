@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { ApiError } from "@/lib/api";
 import type { UpdateTaskInput } from "@/lib/tasks";
-import type { Task, TaskSummary } from "@/lib/types";
+import type { ProjectMember, Task, TaskSummary } from "@/lib/types";
 import { EditTaskSheet } from "./edit-task-sheet";
 import { TaskDetailsSheet } from "./task-details-sheet";
 import { PRIORITY_BADGE_VARIANT, PRIORITY_LABEL, PRIORITY_SORT_ORDER, STATUS_BADGE_VARIANT, STATUS_LABEL } from "./task-labels";
@@ -86,6 +86,14 @@ interface TaskListProps {
   fetchTask: (taskId: string) => Promise<Task>;
   onUpdate: (taskId: string, input: UpdateTaskInput) => Promise<Task>;
   onDelete: (taskId: string) => Promise<void>;
+  // One project-level members fetch (see app/projects/[id]/page.tsx's
+  // useProjectMembers) - passed through to each row's EditTaskSheet
+  // rather than fetched per-row, so opening N rows' edit forms never
+  // becomes N requests for the same project's member list.
+  members: ProjectMember[];
+  membersLoading: boolean;
+  membersError: ApiError | null;
+  onRetryMembers: () => void;
 }
 
 // Fetching/refresh/mutations live in useTasks() (consumed by the page that
@@ -93,7 +101,20 @@ interface TaskListProps {
 // Search/filter/sort state is owned here, since it's pure client-side
 // presentation over whatever useTasks already loaded - it never needs to
 // be lifted to the page.
-export function TaskList({ tasks, loading, error, onRetry, getCachedTask, fetchTask, onUpdate, onDelete }: TaskListProps) {
+export function TaskList({
+  tasks,
+  loading,
+  error,
+  onRetry,
+  getCachedTask,
+  fetchTask,
+  onUpdate,
+  onDelete,
+  members,
+  membersLoading,
+  membersError,
+  onRetryMembers,
+}: TaskListProps) {
   const [filters, setFilters] = useState<TaskFilterState>(DEFAULT_TASK_FILTERS);
 
   const assigneeOptions = useMemo(() => {
@@ -188,6 +209,10 @@ export function TaskList({ tasks, loading, error, onRetry, getCachedTask, fetchT
               fetchTask={fetchTask}
               onUpdate={onUpdate}
               onDelete={onDelete}
+              members={members}
+              membersLoading={membersLoading}
+              membersError={membersError}
+              onRetryMembers={onRetryMembers}
             />
           ))}
         </ul>
@@ -202,13 +227,27 @@ interface TaskRowProps {
   fetchTask: (taskId: string) => Promise<Task>;
   onUpdate: (taskId: string, input: UpdateTaskInput) => Promise<Task>;
   onDelete: (taskId: string) => Promise<void>;
+  members: ProjectMember[];
+  membersLoading: boolean;
+  membersError: ApiError | null;
+  onRetryMembers: () => void;
 }
 
 // Mirrors ConversationRow's (Phase 16 Step 8) inline confirm-swap delete
 // pattern - the established precedent for delete confirmation in this
 // codebase, reused here rather than introducing a new AlertDialog
 // primitive (none exists yet, and this part is meant to stay focused).
-function TaskRow({ task, cachedTask, fetchTask, onUpdate, onDelete }: TaskRowProps) {
+function TaskRow({
+  task,
+  cachedTask,
+  fetchTask,
+  onUpdate,
+  onDelete,
+  members,
+  membersLoading,
+  membersError,
+  onRetryMembers,
+}: TaskRowProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -304,6 +343,10 @@ function TaskRow({ task, cachedTask, fetchTask, onUpdate, onDelete }: TaskRowPro
                 cachedTask={cachedTask}
                 fetchTask={fetchTask}
                 onUpdate={onUpdate}
+                members={members}
+                membersLoading={membersLoading}
+                membersError={membersError}
+                onRetryMembers={onRetryMembers}
                 trigger={
                   <Button type="button" size="icon-xs" variant="ghost" aria-label="Edit task">
                     <Pencil className="size-3.5" aria-hidden="true" />

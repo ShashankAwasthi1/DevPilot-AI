@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/sheet";
 import { ApiError } from "@/lib/api";
 import type { CreateTaskInput } from "@/lib/tasks";
-import type { Task } from "@/lib/types";
+import type { Task, ProjectMember } from "@/lib/types";
 import { TaskFormFields, type TaskFormValues } from "./task-form-fields";
 
 const EMPTY_VALUES: TaskFormValues = {
@@ -27,13 +27,22 @@ const EMPTY_VALUES: TaskFormValues = {
 
 interface CreateTaskSheetProps {
   onCreate: (input: CreateTaskInput) => Promise<Task>;
+  members: ProjectMember[];
+  membersLoading: boolean;
+  membersError: ApiError | null;
+  onRetryMembers: () => void;
 }
 
-// There is no project-members API in this codebase yet (verified during
-// recon), so assigneeId is a free-text field for a known user id rather
-// than a fabricated picker - see this part's report for the full
-// rationale. Left optional either way.
-export function CreateTaskSheet({ onCreate }: CreateTaskSheetProps) {
+// Phase 16 Step 9 Part 10 - assigneeId is now selected from the project's
+// real members (see task-form-fields.tsx) rather than typed as a free-text
+// user id.
+export function CreateTaskSheet({
+  onCreate,
+  members,
+  membersLoading,
+  membersError,
+  onRetryMembers,
+}: CreateTaskSheetProps) {
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<TaskFormValues>(EMPTY_VALUES);
   const [submitting, setSubmitting] = useState(false);
@@ -98,6 +107,10 @@ export function CreateTaskSheet({ onCreate }: CreateTaskSheetProps) {
             onChange={handleFieldChange}
             disabled={submitting}
             autoFocusTitle
+            members={members}
+            membersLoading={membersLoading}
+            membersError={membersError}
+            onRetryMembers={onRetryMembers}
           />
 
           {formError && <p className="text-sm text-destructive">{formError}</p>}

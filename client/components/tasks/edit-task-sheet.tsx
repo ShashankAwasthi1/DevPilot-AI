@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   Sheet,
   SheetContent,
@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
 import type { UpdateTaskInput } from "@/lib/tasks";
-import type { Task, TaskSummary } from "@/lib/types";
+import type { ProjectMember, Task, TaskSummary } from "@/lib/types";
 import { TaskFormFields, type TaskFormValues } from "./task-form-fields";
 
 function valuesFromTask(task: Task): TaskFormValues {
@@ -38,6 +38,10 @@ interface EditTaskSheetProps {
   cachedTask: Task | undefined;
   fetchTask: (taskId: string) => Promise<Task>;
   onUpdate: (taskId: string, input: UpdateTaskInput) => Promise<Task>;
+  members: ProjectMember[];
+  membersLoading: boolean;
+  membersError: ApiError | null;
+  onRetryMembers: () => void;
   trigger: ReactNode;
 }
 
@@ -49,9 +53,24 @@ interface EditTaskSheetProps {
 // intentional values (an untouched field round-trips its own current
 // value; a cleared field is sent as an explicit null) - there's no longer
 // a case where this form doesn't know a field's current value.
-export function EditTaskSheet({ task, cachedTask, fetchTask, onUpdate, trigger }: EditTaskSheetProps) {
+export function EditTaskSheet({
+  task,
+  cachedTask,
+  fetchTask,
+  onUpdate,
+  members,
+  membersLoading,
+  membersError,
+  onRetryMembers,
+  trigger,
+}: EditTaskSheetProps) {
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<TaskFormValues | null>(null);
+  // The loaded task's actual assigneeId, kept separate from `values` -
+  // `values.assigneeId` changes as the user edits the form, but detecting
+  // a stale (no-longer-a-member) assignee must always compare against the
+  // real value the server returned, not whatever the form currently holds.
+  const [loadedAssigneeId, setLoadedAssigneeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<ApiError | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -69,6 +88,7 @@ export function EditTaskSheet({ task, cachedTask, fetchTask, onUpdate, trigger }
       .then((fullTask) => {
         if (requestIdRef.current !== requestId) return;
         setValues(valuesFromTask(fullTask));
+        setLoadedAssigneeId(fullTask.assigneeId);
         setLoading(false);
       })
       .catch((err: unknown) => {
@@ -86,12 +106,23 @@ export function EditTaskSheet({ task, cachedTask, fetchTask, onUpdate, trigger }
       // itself skips the network call when the cache already has this
       // exact task, so this never becomes a duplicate request.
       setValues(cachedTask ? valuesFromTask(cachedTask) : null);
+      setLoadedAssigneeId(cachedTask ? cachedTask.assigneeId : null);
       load();
     } else {
       // Invalidate any in-flight request tied to this now-closed sheet.
       requestIdRef.current += 1;
     }
   }
+
+  // Only meaningful once the real assigneeId is known and the member list
+  // has loaded - if that id isn't among the real members, the current
+  // server value is preserved as a distinct, clearly-labeled option
+  // (never silently swapped to Unassigned or a fake member).
+  const staleAssignee = useMemo(() => {
+    if (!loadedAssigneeId) return null;
+    if (members.some((member) => member.userId === loadedAssigneeId)) return null;
+    return { id: loadedAssigneeId, label: task.assigneeName ?? "Unknown user" };
+  }, [loadedAssigneeId, members, task.assigneeName]);
 
   function handleFieldChange<K extends keyof TaskFormValues>(field: K, value: TaskFormValues[K]) {
     setValues((prev) => (prev ? { ...prev, [field]: value } : prev));
@@ -163,6 +194,11 @@ export function EditTaskSheet({ task, cachedTask, fetchTask, onUpdate, trigger }
               values={values}
               onChange={handleFieldChange}
               disabled={submitting}
+              members={members}
+              membersLoading={membersLoading}
+              membersError={membersError}
+              onRetryMembers={onRetryMembers}
+              staleAssignee={staleAssignee}
             />
 
             {formError && <p className="text-sm text-destructive">{formError}</p>}

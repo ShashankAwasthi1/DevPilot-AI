@@ -1,9 +1,11 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { TaskPriority, TaskStatus } from "@/lib/types";
+import type { ApiError } from "@/lib/api";
+import type { ProjectMember, TaskPriority, TaskStatus } from "@/lib/types";
 
 // Native <select> elements, styled to match Input's own tokens - there is
 // no shadcn Select primitive in this codebase yet, and adding one is out
@@ -32,8 +34,23 @@ export interface TaskFormValues {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
+  // "" means Unassigned - a native <select> requires string values, so
+  // this is the one sentinel used throughout the form; both sheets
+  // translate it to `null`/`undefined` (never an empty string) at the
+  // actual API-call boundary. Any other value is always a real
+  // ProjectMember's userId, never a display name/email.
   assigneeId: string;
   dueDate: string;
+}
+
+// A task's current assigneeId that no longer matches any real project
+// member (e.g. they were removed from the project since being assigned).
+// Rendered as one extra, clearly-labeled select option so the existing
+// server value is never silently discarded or replaced by Unassigned -
+// see EditTaskSheet, which is the only caller that ever computes one.
+export interface StaleAssignee {
+  id: string;
+  label: string;
 }
 
 interface TaskFormFieldsProps {
@@ -42,6 +59,15 @@ interface TaskFormFieldsProps {
   onChange: <K extends keyof TaskFormValues>(field: K, value: TaskFormValues[K]) => void;
   disabled: boolean;
   autoFocusTitle?: boolean;
+  members: ProjectMember[];
+  membersLoading: boolean;
+  membersError: ApiError | null;
+  onRetryMembers: () => void;
+  staleAssignee?: StaleAssignee | null;
+}
+
+function memberLabel(member: ProjectMember): string {
+  return member.name || member.email;
 }
 
 // Shared field set for both CreateTaskSheet and EditTaskSheet, so the two
@@ -49,7 +75,18 @@ interface TaskFormFieldsProps {
 // handler, and initial values differ between them. EditTaskSheet no
 // longer needs "unknown field" hints (Phase 16 Step 9 Part 9): it only
 // ever renders this once populated from a real, fully-loaded server Task.
-export function TaskFormFields({ idPrefix, values, onChange, disabled, autoFocusTitle }: TaskFormFieldsProps) {
+export function TaskFormFields({
+  idPrefix,
+  values,
+  onChange,
+  disabled,
+  autoFocusTitle,
+  members,
+  membersLoading,
+  membersError,
+  onRetryMembers,
+  staleAssignee,
+}: TaskFormFieldsProps) {
   return (
     <>
       <div className="flex flex-col gap-1.5">
@@ -114,14 +151,35 @@ export function TaskFormFields({ idPrefix, values, onChange, disabled, autoFocus
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor={`${idPrefix}-assignee`}>Assignee user ID</Label>
-        <Input
+        <Label htmlFor={`${idPrefix}-assignee`}>Assignee</Label>
+        <select
           id={`${idPrefix}-assignee`}
+          className={SELECT_CLASSNAME}
           value={values.assigneeId}
           onChange={(event) => onChange("assigneeId", event.target.value)}
-          disabled={disabled}
-          placeholder="Optional"
-        />
+          disabled={disabled || membersLoading}
+        >
+          <option value="">Unassigned</option>
+          {/* Rendered even while not selected as a real option, never disabled -
+              a disabled option can't stay selected, which would silently
+              discard the server's actual current value the moment this
+              select re-renders. */}
+          {staleAssignee && <option value={staleAssignee.id}>{staleAssignee.label} (not a project member)</option>}
+          {members.map((member) => (
+            <option key={member.userId} value={member.userId}>
+              {memberLabel(member)}
+            </option>
+          ))}
+        </select>
+        {membersLoading && <p className="text-xs text-muted-foreground">Loading project members…</p>}
+        {membersError && (
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-destructive">Couldn&apos;t load project members.</p>
+            <Button type="button" variant="ghost" size="xs" onClick={onRetryMembers} disabled={disabled}>
+              Retry
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-1.5">
