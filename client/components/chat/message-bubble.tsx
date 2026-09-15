@@ -11,15 +11,19 @@ interface MessageBubbleProps {
 
 // Only http:/https:/mailto: links are ever rendered as a real, clickable
 // anchor - javascript:, data:, vbscript:, file:, and any other scheme
-// degrade to inert text. A fixed placeholder base is used purely so
-// relative/scheme-less hrefs can still be parsed for their protocol
-// without needing `window` (this component may render on the server).
+// degrade to inert text. Deliberately parsed with NO base URL: `new URL`
+// only succeeds without a base when `href` is already a fully-qualified,
+// absolute URL with an explicit scheme - a relative path ("/some/path")
+// or a protocol-relative URL ("//example.com") has no scheme of its own
+// and throws here rather than silently resolving against some assumed
+// origin, which is exactly what makes both of those cases correctly
+// rejected rather than accidentally treated as "http:".
 const ALLOWED_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
 function isSafeHref(href: string): boolean {
   if (href.length === 0) return false;
   try {
-    return ALLOWED_LINK_PROTOCOLS.has(new URL(href, "http://localhost").protocol);
+    return ALLOWED_LINK_PROTOCOLS.has(new URL(href).protocol);
   } catch {
     return false;
   }
