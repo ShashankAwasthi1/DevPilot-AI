@@ -3,7 +3,26 @@ import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
 import { assertRole, getProjectAccess, ProjectRole } from "./project.service";
 import { recordActivity } from "./activity.service";
+import { deleteChunksForDocument, indexDocument } from "./document-indexing.service";
 import type { CreateDocumentInput, UpdateDocumentInput } from "../validation/document.validation";
+
+// Indexing calls a third-party embedding API and must never hold the
+// document's own DB transaction open while it's in flight - so it always
+// runs after that transaction has committed, never inside it. A failure
+// here must never fail the document save: the document itself is already
+// safely persisted by this point, and re-indexing will succeed on the next
+// edit. Never logs the document's content (which could be large/user
+// text) - only the documentId and the error.
+async function indexAfterCommit(documentId: string): Promise<void> {
+  try {
+    await indexDocument(documentId);
+  } catch (err) {
+    console.error(
+      `Failed to index document ${documentId} for search:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
 
 export interface DocumentDto {
   id: string;
@@ -85,6 +104,8 @@ export async function createDocument(
 
     return created;
   });
+
+  await indexAfterCommit(document.id);
 
   return toDocumentDto(document);
 }
@@ -171,6 +192,8 @@ export async function updateDocument(
     return saved;
   });
 
+  await indexAfterCommit(updated.id);
+
   return toDocumentDto(updated);
 }
 
@@ -200,6 +223,13 @@ export async function archiveDocument(
       type: "DOCUMENT_ARCHIVED",
       metadata: { documentId, projectId, actorId: userId },
     });
+
+    // Pure DB work (no external API call), so - unlike indexing on
+    // create/update - this can safely run inside the same transaction.
+    // There is no restore path today, so an archived document's chunks
+    // can never become relevant again; deleting them now guarantees it's
+    // immediately un-searchable rather than relying on a query-time filter.
+    await deleteChunksForDocument(tx, documentId);
 
     return saved;
   });

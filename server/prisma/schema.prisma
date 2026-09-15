@@ -3,13 +3,15 @@
 // are added in later phases per BLUEPRINT.md.
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DATABASE_URL_UNPOOLED")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DATABASE_URL_UNPOOLED")
+  extensions = [vector]
 }
 
 enum ProjectMemberRole {
@@ -203,8 +205,9 @@ model Document {
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  author  User    @relation(fields: [authorId], references: [id])
+  project Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  author  User            @relation(fields: [authorId], references: [id])
+  chunks  DocumentChunk[]
 
   @@index([projectId])
   @@index([projectId, archivedAt, createdAt])
@@ -242,4 +245,35 @@ model Message {
 
   @@index([conversationId, createdAt, id])
   @@map("messages")
+}
+
+// Phase 14: chunks of a Document's content, each with an embedding vector
+// for semantic search (see docs/adr and the Phase 14 plan). Chunks are
+// treated as immutable - re-indexing deletes and recreates them, so there
+// is no updatedAt here. projectId is denormalized from the parent Document
+// so retrieval can filter/authorize directly on this table without a join,
+// and so the vector index's filtered scans stay fast.
+//
+// The `embedding` column itself (vector(1536), NOT NULL, plus its HNSW
+// index) is added via hand-written SQL in this model's migration, not
+// through this schema - Prisma's `Unsupported` type is excluded from the
+// generated Client entirely, and there is no Prisma DSL for pgvector's
+// HNSW/cosine operator class. All reads/writes to `embedding` go through
+// $queryRaw/$executeRaw in the service layer (Phase 14, later steps).
+model DocumentChunk {
+  id         String   @id @default(cuid())
+  documentId String
+  projectId  String
+  chunkIndex Int
+  content    String
+  charCount  Int
+  createdAt  DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  embedding Unsupported("vector(1536)")
+
+  @@index([documentId, chunkIndex])
+  @@index([projectId])
+  @@map("document_chunks")
 }

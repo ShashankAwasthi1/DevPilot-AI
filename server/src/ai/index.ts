@@ -1,6 +1,8 @@
 import { getAIConfig } from "../config/ai";
 import { AnthropicProvider } from "./providers/anthropic.provider";
+import { OpenAIEmbeddingProvider } from "./openai-embedding-provider";
 import type { AIProvider } from "./provider";
+import type { EmbeddingProvider } from "./embedding-provider";
 
 // The single place that decides which concrete provider backs the AIProvider
 // interface. Every caller goes through this factory instead of constructing
@@ -17,6 +19,15 @@ export function getAIProvider(): AIProvider {
   }
 }
 
+// The single place that decides which concrete provider backs the
+// EmbeddingProvider interface - the same role as getAIProvider above, for
+// a deliberately separate capability (embeddings, not generation). Only
+// one implementation exists today; this is still the seam a second one
+// would plug into later, without touching any caller.
+export function getEmbeddingProvider(): EmbeddingProvider {
+  return new OpenAIEmbeddingProvider();
+}
+
 export type {
   AIProvider,
   ProviderContentBlock,
@@ -25,3 +36,4 @@ export type {
   StreamEvent,
   StreamTurnParams,
 } from "./provider";
+export type { EmbeddingProvider } from "./embedding-provider";

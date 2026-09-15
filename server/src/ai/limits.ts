@@ -24,4 +24,14 @@ export const AI_LIMITS = {
   // truncated safely (see tool-loop.ts's boundToolResult), never mid-way
   // through a JSON structure.
   MAX_TOOL_RESULT_CHARS: 4000,
+  // Phase 14 (RAG) document chunking - see ai/chunking.ts. Character-based,
+  // same no-tokenizer-dependency convention as the rest of this file.
+  MAX_CHUNK_CHARS: 1200,
+  CHUNK_OVERLAP_CHARS: 150,
+  MAX_CHUNKS_PER_DOCUMENT: 200,
+  // Phase 14 (RAG) semantic search - see document-retrieval.service.ts and
+  // ai/tools/search-documents.tool.ts. The query is bounded before it's
+  // ever sent to the embedding provider.
+  MAX_SEARCH_RESULTS: 5,
+  MAX_SEARCH_QUERY_LENGTH: 300,
 } as const;
