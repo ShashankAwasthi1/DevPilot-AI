@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type MouseEvent } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { CheckCircle2, Eye, ListTodo, Pencil, Trash2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -10,37 +10,66 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { ApiError } from "@/lib/api";
 import type { UpdateTaskInput } from "@/lib/tasks";
-import type { Task, TaskPriority, TaskStatus, TaskSummary } from "@/lib/types";
+import type { Task, TaskSummary } from "@/lib/types";
 import { EditTaskSheet } from "./edit-task-sheet";
 import { TaskDetailsSheet } from "./task-details-sheet";
+import { PRIORITY_BADGE_VARIANT, PRIORITY_LABEL, PRIORITY_SORT_ORDER, STATUS_BADGE_VARIANT, STATUS_LABEL } from "./task-labels";
+import { DEFAULT_TASK_FILTERS, TaskFilters, type TaskFilterState } from "./task-filters";
 
-export const STATUS_LABEL: Record<TaskStatus, string> = {
-  TODO: "To do",
-  IN_PROGRESS: "In progress",
-  IN_REVIEW: "In review",
-  DONE: "Done",
-};
+// Search/filter/sort happen entirely client-side over the already-loaded,
+// server-bounded (limit<=50) list - see this part's report for the full
+// rationale. No new network request is ever made for a keystroke or a
+// filter change.
+function filterAndSortTasks(
+  tasks: TaskSummary[],
+  filters: TaskFilterState,
+  getCachedTask: (taskId: string) => Task | undefined,
+): TaskSummary[] {
+  const query = filters.search.trim().toLowerCase();
 
-const STATUS_BADGE_VARIANT: Record<TaskStatus, "outline" | "secondary" | "default"> = {
-  TODO: "outline",
-  IN_PROGRESS: "secondary",
-  IN_REVIEW: "secondary",
-  DONE: "default",
-};
+  let result = tasks;
+  if (query) {
+    result = result.filter((task) => task.title.toLowerCase().includes(query));
+  }
+  if (filters.status !== "ALL") {
+    result = result.filter((task) => task.status === filters.status);
+  }
+  if (filters.priority !== "ALL") {
+    result = result.filter((task) => task.priority === filters.priority);
+  }
+  if (filters.assignee !== "ALL") {
+    result = result.filter((task) => task.assigneeName === filters.assignee);
+  }
 
-export const PRIORITY_LABEL: Record<TaskPriority, string> = {
-  LOW: "Low",
-  MEDIUM: "Medium",
-  HIGH: "High",
-  URGENT: "Urgent",
-};
+  // Copy before sorting - the array returned by useTasks/useApiData must
+  // never be mutated in place.
+  const sorted = [...result];
 
-const PRIORITY_BADGE_VARIANT: Record<TaskPriority, "outline" | "secondary" | "destructive"> = {
-  LOW: "outline",
-  MEDIUM: "outline",
-  HIGH: "secondary",
-  URGENT: "destructive",
-};
+  if (filters.sort === "PRIORITY") {
+    sorted.sort((a, b) => PRIORITY_SORT_ORDER[a.priority] - PRIORITY_SORT_ORDER[b.priority]);
+  } else if (filters.sort === "TITLE") {
+    sorted.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base" }));
+  } else if (filters.sort === "DUE_DATE") {
+    // TaskSummary has no dueDate at all - only tasks cached from a real
+    // create/update response (see useTasks's getCachedTask) have a known
+    // due date. Tasks with a known due date sort ascending; every other
+    // task (genuinely no due date, or simply not loaded yet) sorts after
+    // them, keeping their existing relative order (Array#sort is stable).
+    sorted.sort((a, b) => {
+      const aDue = getCachedTask(a.id)?.dueDate ?? null;
+      const bDue = getCachedTask(b.id)?.dueDate ?? null;
+      if (aDue && bDue) return new Date(aDue).getTime() - new Date(bDue).getTime();
+      if (aDue && !bDue) return -1;
+      if (!aDue && bDue) return 1;
+      return 0;
+    });
+  }
+  // "LIST_ORDER" (the default) intentionally does not reorder at all - see
+  // this part's report for why Newest/Oldest were not implemented as
+  // sort options.
+
+  return sorted;
+}
 
 interface TaskListProps {
   tasks: TaskSummary[] | null;
@@ -52,10 +81,36 @@ interface TaskListProps {
   onDelete: (taskId: string) => Promise<void>;
 }
 
-// Purely presentational - fetching/refresh/mutations live in useTasks()
-// (consumed by the page that renders this), same split as
-// ConversationList vs. its page.tsx owner.
+// Fetching/refresh/mutations live in useTasks() (consumed by the page that
+// renders this) - same split as ConversationList vs. its page.tsx owner.
+// Search/filter/sort state is owned here, since it's pure client-side
+// presentation over whatever useTasks already loaded - it never needs to
+// be lifted to the page.
 export function TaskList({ tasks, loading, error, onRetry, getCachedTask, onUpdate, onDelete }: TaskListProps) {
+  const [filters, setFilters] = useState<TaskFilterState>(DEFAULT_TASK_FILTERS);
+
+  const assigneeOptions = useMemo(() => {
+    if (!tasks) return [];
+    const names = new Set<string>();
+    for (const task of tasks) {
+      if (task.assigneeName) names.add(task.assigneeName);
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+  }, [tasks]);
+
+  const displayedTasks = useMemo(() => {
+    if (!tasks) return [];
+    return filterAndSortTasks(tasks, filters, getCachedTask);
+  }, [tasks, filters, getCachedTask]);
+
+  function handleFilterChange<K extends keyof TaskFilterState>(field: K, value: TaskFilterState[K]) {
+    setFilters((prev) => ({ ...prev, [field]: value }));
+  }
+
+  function handleClearFilters() {
+    setFilters(DEFAULT_TASK_FILTERS);
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col gap-2">
@@ -92,17 +147,44 @@ export function TaskList({ tasks, loading, error, onRetry, getCachedTask, onUpda
   }
 
   return (
-    <ul className="flex flex-col gap-2">
-      {tasks.map((task) => (
-        <TaskRow
-          key={task.id}
-          task={task}
-          cachedTask={getCachedTask(task.id)}
-          onUpdate={onUpdate}
-          onDelete={onDelete}
-        />
-      ))}
-    </ul>
+    <div className="flex flex-col gap-3">
+      <TaskFilters
+        filters={filters}
+        onChange={handleFilterChange}
+        assigneeOptions={assigneeOptions}
+        onClear={handleClearFilters}
+      />
+
+      <p className="text-xs text-muted-foreground">
+        {displayedTasks.length === tasks.length
+          ? `${tasks.length} task${tasks.length === 1 ? "" : "s"}`
+          : `Showing ${displayedTasks.length} of ${tasks.length} tasks`}
+      </p>
+
+      {displayedTasks.length === 0 ? (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-3 py-10 text-center text-muted-foreground">
+            <ListTodo className="size-8" aria-hidden="true" />
+            <p>No tasks match your current search and filters.</p>
+            <Button type="button" variant="outline" size="sm" onClick={handleClearFilters}>
+              Clear filters
+            </Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {displayedTasks.map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              cachedTask={getCachedTask(task.id)}
+              onUpdate={onUpdate}
+              onDelete={onDelete}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
