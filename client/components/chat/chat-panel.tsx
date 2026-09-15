@@ -9,6 +9,7 @@ import { useApiData } from "@/lib/use-api-data";
 import { ChatInput } from "./chat-input";
 import { MessageBubble } from "./message-bubble";
 import { ModeToggle, type ChatMode } from "./mode-toggle";
+import { ToolActivity, type ToolActivityItem } from "./tool-activity";
 import type { ChatMessage, ChatMessageRole, ConversationSummary } from "@/lib/types";
 
 interface ChatPanelProps {
@@ -21,6 +22,13 @@ interface LocalMessage {
   role: ChatMessageRole;
   content: string;
   failed?: boolean;
+  // Only ever set on the assistant message currently (or having just
+  // finished) streaming in this session - history fetched from the server
+  // never has this, since tool calls aren't persisted (see
+  // server/src/services/message.service.ts). Scoped per-message rather
+  // than as one panel-wide list, so each turn keeps its own activity and a
+  // new turn never leaks into or clears a previous one.
+  toolActivity?: ToolActivityItem[];
 }
 
 export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
@@ -77,6 +85,38 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
               : message,
           ),
         );
+      } else if (event.type === "tool_call") {
+        setLocalMessages((prev) =>
+          prev.map((message) => {
+            if (message.id !== assistantMessageId) return message;
+            const existing = message.toolActivity ?? [];
+            const item: ToolActivityItem = {
+              // Includes the running count so repeated calls to the same
+              // tool within one turn each get their own stable, unique key.
+              id: `${assistantMessageId}-tool-${existing.length}`,
+              name: event.name,
+              status: "running",
+            };
+            return { ...message, toolActivity: [...existing, item] };
+          }),
+        );
+      } else if (event.type === "tool_result") {
+        setLocalMessages((prev) =>
+          prev.map((message) => {
+            if (message.id !== assistantMessageId || !message.toolActivity) return message;
+            // Tool calls execute strictly one at a time, in order (see
+            // server/src/ai/tool-loop.ts / agent-runner.ts), and each
+            // tool_result always corresponds to the oldest still-running
+            // call - the backend's tool_result event has no call id to
+            // match against, so this ordering guarantee is what makes
+            // matching correct even when the same tool is called twice.
+            const index = message.toolActivity.findIndex((item) => item.status === "running");
+            if (index === -1) return message;
+            const nextActivity = [...message.toolActivity];
+            nextActivity[index] = { ...nextActivity[index], status: event.ok ? "success" : "error" };
+            return { ...message, toolActivity: nextActivity };
+          }),
+        );
       } else if (event.type === "done") {
         setStreaming(false);
       } else if (event.type === "error") {
@@ -87,9 +127,6 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
           ),
         );
       }
-      // tool_call / tool_result: received but intentionally not rendered
-      // yet - a later Phase 16 step adds tool-activity UI. Ignoring them
-      // here is safe: they never affect message content or stream state.
     }
 
     void streamChatMessage(
@@ -138,6 +175,9 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
         )}
         {allMessages.map((message) => (
           <div key={message.id}>
+            {message.toolActivity && message.toolActivity.length > 0 && (
+              <ToolActivity items={message.toolActivity} />
+            )}
             <MessageBubble role={message.role} content={message.content} />
             {message.failed && (
               <p className="mt-1 text-right text-xs text-destructive">
