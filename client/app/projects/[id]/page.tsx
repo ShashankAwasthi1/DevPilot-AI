@@ -47,6 +47,7 @@ export default function ProjectWorkspacePage(props: PageProps<"/projects/[id]">)
     updateTask,
     deleteTask,
     getCachedTask,
+    fetchTask,
   } = useTasks(projectId);
 
   if (authLoading || authError || !user) {
@@ -93,6 +94,7 @@ export default function ProjectWorkspacePage(props: PageProps<"/projects/[id]">)
           error={tasksError}
           onRetry={refresh}
           getCachedTask={getCachedTask}
+          fetchTask={fetchTask}
           onUpdate={updateTask}
           onDelete={deleteTask}
         />

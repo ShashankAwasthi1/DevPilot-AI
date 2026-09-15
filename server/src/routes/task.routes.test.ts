@@ -24,7 +24,7 @@ function layers(router: unknown): RouteLayer[] {
   return (router as { stack: RouteLayer[] }).stack;
 }
 
-test("task.routes: registers exactly the four expected method+path combinations", () => {
+test("task.routes: registers exactly the five expected method+path combinations", () => {
   const router = require("./task.routes.ts").default;
   const routes = layers(router)
     .filter((layer) => layer.route)
@@ -33,9 +33,18 @@ test("task.routes: registers exactly the four expected method+path combinations"
   assert.deepEqual(routes, [
     { path: "/projects/:projectId/tasks", methods: ["post"] },
     { path: "/projects/:projectId/tasks", methods: ["get"] },
+    { path: "/tasks/:id", methods: ["get"] },
     { path: "/tasks/:id", methods: ["patch"] },
     { path: "/tasks/:id", methods: ["delete"] },
   ]);
+});
+
+test("task.routes: GET /tasks/:id requires auth and has no body-validation middleware", () => {
+  const router = require("./task.routes.ts").default;
+  const layer = layers(router).find((l) => l.route?.path === "/tasks/:id" && l.route.methods.get);
+  const middlewareNames = layer!.route!.stack.map((s) => s.name);
+
+  assert.deepEqual(middlewareNames, ["requireAuth", "getTask"]);
 });
 
 test("task.routes: POST /projects/:projectId/tasks requires auth and runs create validation before the controller", () => {

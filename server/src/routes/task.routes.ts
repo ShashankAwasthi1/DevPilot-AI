@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createTask, deleteTask, listTasks, updateTask } from "../controllers/task.controller";
+import { createTask, deleteTask, getTask, listTasks, updateTask } from "../controllers/task.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate";
 import { createTaskSchema, updateTaskSchema } from "../validation/task.validation";
@@ -16,6 +16,7 @@ const router = Router();
 
 router.post("/projects/:projectId/tasks", requireAuth, validate(createTaskSchema), createTask);
 router.get("/projects/:projectId/tasks", requireAuth, listTasks);
+router.get("/tasks/:id", requireAuth, getTask);
 router.patch("/tasks/:id", requireAuth, validate(updateTaskSchema), updateTask);
 router.delete("/tasks/:id", requireAuth, deleteTask);
 

@@ -37,6 +37,15 @@ export async function listTasks(req: Request, res: Response, next: NextFunction)
   }
 }
 
+export async function getTask(req: Request, res: Response, next: NextFunction) {
+  try {
+    const task = await taskService.getTask(req.user!.id, req.params.id);
+    res.status(200).json({ status: "ok", data: { task } });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function updateTask(req: Request, res: Response, next: NextFunction) {
   try {
     const task = await taskService.updateTask(req.user!.id, req.params.id, req.body);

@@ -42,30 +42,14 @@ interface TaskFormFieldsProps {
   onChange: <K extends keyof TaskFormValues>(field: K, value: TaskFormValues[K]) => void;
   disabled: boolean;
   autoFocusTitle?: boolean;
-  // Shown under description/assignee/due date when this form's caller
-  // doesn't actually know the task's current value for that field (see
-  // EditTaskSheet) - never fabricated, just an honest "we don't know"
-  // notice, and leaving the field blank in that case omits it from the
-  // update entirely (undefined = "don't change", per task.service.ts's
-  // update semantics) rather than clearing it.
-  descriptionHint?: string;
-  assigneeHint?: string;
-  dueDateHint?: string;
 }
 
 // Shared field set for both CreateTaskSheet and EditTaskSheet, so the two
 // forms can't silently drift apart - only the surrounding Sheet, submit
-// handler, and initial values differ between them.
-export function TaskFormFields({
-  idPrefix,
-  values,
-  onChange,
-  disabled,
-  autoFocusTitle,
-  descriptionHint,
-  assigneeHint,
-  dueDateHint,
-}: TaskFormFieldsProps) {
+// handler, and initial values differ between them. EditTaskSheet no
+// longer needs "unknown field" hints (Phase 16 Step 9 Part 9): it only
+// ever renders this once populated from a real, fully-loaded server Task.
+export function TaskFormFields({ idPrefix, values, onChange, disabled, autoFocusTitle }: TaskFormFieldsProps) {
   return (
     <>
       <div className="flex flex-col gap-1.5">
@@ -91,7 +75,6 @@ export function TaskFormFields({
           disabled={disabled}
           placeholder="Optional"
         />
-        {descriptionHint && <p className="text-xs text-muted-foreground">{descriptionHint}</p>}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -139,7 +122,6 @@ export function TaskFormFields({
           disabled={disabled}
           placeholder="Optional"
         />
-        {assigneeHint && <p className="text-xs text-muted-foreground">{assigneeHint}</p>}
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -151,7 +133,6 @@ export function TaskFormFields({
           onChange={(event) => onChange("dueDate", event.target.value)}
           disabled={disabled}
         />
-        {dueDateHint && <p className="text-xs text-muted-foreground">{dueDateHint}</p>}
       </div>
     </>
   );

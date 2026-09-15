@@ -167,6 +167,19 @@ export async function createTask(
   return toTaskDto(task);
 }
 
+// Phase 16 Step 9 Part 9 - fetching a single task's full detail.
+// getTaskAccess is the exact same authorization boundary update/delete
+// already use: it 404s for a nonexistent task before ever touching
+// project access, and 404s again (never a 403) if the caller has no
+// relationship to the task's project - so a user outside the project
+// can't distinguish "task doesn't exist" from "task belongs to a project
+// you can't see". Any role (including VIEWER) may read a task, matching
+// listTaskSummariesForProject's own no-role-check read access.
+export async function getTask(userId: string, taskId: string): Promise<TaskDto> {
+  const { task } = await getTaskAccess(taskId, userId);
+  return toTaskDto(task);
+}
+
 // Phase 16 Step 9 - updating a task. getTaskAccess resolves the task (and
 // its project's role for this user) first, and only its resolved
 // `task.id`/`projectId` are ever used below - never anything the caller

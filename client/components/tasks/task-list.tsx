@@ -76,7 +76,14 @@ interface TaskListProps {
   loading: boolean;
   error: ApiError | null;
   onRetry: () => void;
+  // Cache-only, synchronous - used for Part 8's due-date sort (never
+  // triggers a request) and for instant-paint in the details/edit sheets.
   getCachedTask: (taskId: string) => Task | undefined;
+  // Server-backed - the actual source of truth for a single full Task
+  // (GET /tasks/:id, Phase 16 Step 9 Part 9). Passed through to the
+  // details/edit sheets rather than fetched here, since each row's sheet
+  // only needs it once opened.
+  fetchTask: (taskId: string) => Promise<Task>;
   onUpdate: (taskId: string, input: UpdateTaskInput) => Promise<Task>;
   onDelete: (taskId: string) => Promise<void>;
 }
@@ -86,7 +93,7 @@ interface TaskListProps {
 // Search/filter/sort state is owned here, since it's pure client-side
 // presentation over whatever useTasks already loaded - it never needs to
 // be lifted to the page.
-export function TaskList({ tasks, loading, error, onRetry, getCachedTask, onUpdate, onDelete }: TaskListProps) {
+export function TaskList({ tasks, loading, error, onRetry, getCachedTask, fetchTask, onUpdate, onDelete }: TaskListProps) {
   const [filters, setFilters] = useState<TaskFilterState>(DEFAULT_TASK_FILTERS);
 
   const assigneeOptions = useMemo(() => {
@@ -178,6 +185,7 @@ export function TaskList({ tasks, loading, error, onRetry, getCachedTask, onUpda
               key={task.id}
               task={task}
               cachedTask={getCachedTask(task.id)}
+              fetchTask={fetchTask}
               onUpdate={onUpdate}
               onDelete={onDelete}
             />
@@ -191,6 +199,7 @@ export function TaskList({ tasks, loading, error, onRetry, getCachedTask, onUpda
 interface TaskRowProps {
   task: TaskSummary;
   cachedTask: Task | undefined;
+  fetchTask: (taskId: string) => Promise<Task>;
   onUpdate: (taskId: string, input: UpdateTaskInput) => Promise<Task>;
   onDelete: (taskId: string) => Promise<void>;
 }
@@ -199,7 +208,7 @@ interface TaskRowProps {
 // pattern - the established precedent for delete confirmation in this
 // codebase, reused here rather than introducing a new AlertDialog
 // primitive (none exists yet, and this part is meant to stay focused).
-function TaskRow({ task, cachedTask, onUpdate, onDelete }: TaskRowProps) {
+function TaskRow({ task, cachedTask, fetchTask, onUpdate, onDelete }: TaskRowProps) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -283,6 +292,7 @@ function TaskRow({ task, cachedTask, onUpdate, onDelete }: TaskRowProps) {
               <TaskDetailsSheet
                 task={task}
                 cachedTask={cachedTask}
+                fetchTask={fetchTask}
                 trigger={
                   <Button type="button" size="icon-xs" variant="ghost" aria-label="View task details">
                     <Eye className="size-3.5" aria-hidden="true" />
@@ -292,6 +302,7 @@ function TaskRow({ task, cachedTask, onUpdate, onDelete }: TaskRowProps) {
               <EditTaskSheet
                 task={task}
                 cachedTask={cachedTask}
+                fetchTask={fetchTask}
                 onUpdate={onUpdate}
                 trigger={
                   <Button type="button" size="icon-xs" variant="ghost" aria-label="Edit task">

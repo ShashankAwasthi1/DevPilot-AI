@@ -34,6 +34,13 @@ export function listTasks(projectId: string, limit?: number): Promise<TaskSummar
     .then((result) => result.tasks);
 }
 
+// GET /tasks/:id - the full TaskDto, authorized the same way update/delete
+// are (project membership via the task's own projectId); a task outside
+// the caller's projects 404s exactly like update/delete already do.
+export function getTask(taskId: string): Promise<Task> {
+  return api.get<{ task: Task }>(`/tasks/${taskId}`).then((result) => result.task);
+}
+
 export function createTask(projectId: string, input: CreateTaskInput): Promise<Task> {
   return api.post<{ task: Task }>(`/projects/${projectId}/tasks`, input).then((result) => result.task);
 }
