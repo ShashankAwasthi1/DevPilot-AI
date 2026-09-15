@@ -52,6 +52,10 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
   // remounted with a new conversation (same as localMessages below).
   const [mode, setMode] = useState<ChatMode>("chat");
   const abortRef = useRef<AbortController | null>(null);
+  // Tracks which local assistant message the in-flight stream belongs to,
+  // so handleStop can update that specific message's tool activity without
+  // handleSend needing to lift assistantMessageId into component state.
+  const currentAssistantIdRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -75,6 +79,7 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
 
     const controller = new AbortController();
     abortRef.current = controller;
+    currentAssistantIdRef.current = assistantMessageId;
 
     function handleStreamEvent(event: StreamChatEvent) {
       if (event.type === "text") {
@@ -119,8 +124,12 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
         );
       } else if (event.type === "done") {
         setStreaming(false);
+        abortRef.current = null;
+        currentAssistantIdRef.current = null;
       } else if (event.type === "error") {
         setStreaming(false);
+        abortRef.current = null;
+        currentAssistantIdRef.current = null;
         setLocalMessages((prev) =>
           prev.map((message) =>
             message.id === assistantMessageId ? { ...message, failed: true } : message,
@@ -135,6 +144,34 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
       content,
       { mode, onEvent: handleStreamEvent },
       controller.signal,
+    );
+  }
+
+  // The user intentionally cancelled generation. streamChatMessage's
+  // AbortError handling never calls onEvent for an aborted turn (by
+  // design - see ai-chat.ts), so nothing there will ever set streaming
+  // back to false or touch tool activity for us; this handler is the only
+  // place that does it, and it does so unconditionally rather than
+  // relying on the stream to notice the cancellation.
+  function handleStop() {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setStreaming(false);
+
+    const assistantId = currentAssistantIdRef.current;
+    currentAssistantIdRef.current = null;
+    if (!assistantId) return;
+
+    setLocalMessages((prev) =>
+      prev.map((message) => {
+        if (message.id !== assistantId || !message.toolActivity) return message;
+        // Never let a call that was still running when the user stopped
+        // read as "success" - it stays visibly incomplete instead.
+        const nextActivity = message.toolActivity.map((item) =>
+          item.status === "running" ? { ...item, status: "stopped" as const } : item,
+        );
+        return { ...message, toolActivity: nextActivity };
+      }),
     );
   }
 
@@ -197,7 +234,7 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
             </p>
           )}
         </div>
-        <ChatInput onSend={handleSend} disabled={streaming} />
+        <ChatInput onSend={handleSend} onStop={handleStop} streaming={streaming} />
       </div>
     </div>
   );

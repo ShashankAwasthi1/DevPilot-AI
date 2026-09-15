@@ -1,12 +1,16 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
-import { Check, CircleX, Loader2 } from "lucide-react";
+import { Check, CircleX, Loader2, Square } from "lucide-react";
 
 export interface ToolActivityItem {
   id: string;
   name: string;
-  status: "running" | "success" | "error";
+  // "stopped" is set only when the user cancels generation while this
+  // specific call was still "running" (see chat-panel.tsx's handleStop) -
+  // it is never something the backend sends, and a stopped item must never
+  // be reported as "success".
+  status: "running" | "success" | "error" | "stopped";
 }
 
 // Safe, human-readable labels only - the raw tool name is never rendered
@@ -32,6 +36,7 @@ function statusText(item: ToolActivityItem): string {
   const label = toolLabel(item.name);
   if (item.status === "running") return `${label}…`;
   if (item.status === "error") return `${label} — failed`;
+  if (item.status === "stopped") return `${label} — stopped`;
   return `${label} — done`;
 }
 
@@ -65,6 +70,7 @@ export function ToolActivity({ items }: ToolActivityProps) {
             <Check className="size-3 shrink-0 text-emerald-600 dark:text-emerald-500" aria-hidden="true" />
           )}
           {item.status === "error" && <CircleX className="size-3 shrink-0 text-destructive" aria-hidden="true" />}
+          {item.status === "stopped" && <Square className="size-3 shrink-0" aria-hidden="true" />}
           <span>{statusText(item)}</span>
         </motion.li>
       ))}
