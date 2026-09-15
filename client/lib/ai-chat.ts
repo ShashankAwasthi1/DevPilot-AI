@@ -4,10 +4,16 @@ import { API_URL } from "./api";
 // server/src/ai/tool-loop.ts and server/src/ai/agent-runner.ts) - a single
 // discriminated event type scales to both chat and agent mode without a
 // growing list of positional callbacks.
+export interface DocumentSourceRef {
+  documentId: string;
+  title: string;
+}
+
 export type StreamChatEvent =
   | { type: "text"; text: string }
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
+  | { type: "source"; sources: DocumentSourceRef[] }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -110,6 +116,29 @@ export async function streamChatMessage(
           const data = JSON.parse(parsed.data) as { name?: string; ok?: boolean };
           if (typeof data.name === "string" && typeof data.ok === "boolean") {
             onEvent({ type: "tool_result", name: data.name, ok: data.ok });
+          }
+          continue;
+        }
+
+        if (parsed.event === "source") {
+          if (!parsed.data) continue;
+          // Defensive parsing - never pass an arbitrary server payload
+          // straight into UI state. Only documentId/title, both non-empty
+          // strings, survive; anything else is silently dropped.
+          const data = JSON.parse(parsed.data) as { sources?: unknown };
+          if (Array.isArray(data.sources)) {
+            const sources: DocumentSourceRef[] = data.sources.filter(
+              (entry): entry is DocumentSourceRef =>
+                typeof entry === "object" &&
+                entry !== null &&
+                typeof (entry as { documentId?: unknown }).documentId === "string" &&
+                (entry as { documentId: string }).documentId.length > 0 &&
+                typeof (entry as { title?: unknown }).title === "string" &&
+                (entry as { title: string }).title.length > 0,
+            );
+            if (sources.length > 0) {
+              onEvent({ type: "source", sources });
+            }
           }
           continue;
         }

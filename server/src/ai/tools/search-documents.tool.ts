@@ -22,8 +22,18 @@ export const searchDocumentsTool: ToolDefinition<z.infer<typeof schema>> = {
       args.query,
       args.limit ?? AI_LIMITS.MAX_SEARCH_RESULTS,
     );
-    // Only what the model needs to answer and cite a source - never the
-    // embedding, chunk/document ids, or distance score.
-    return results.map((r) => ({ documentTitle: r.documentTitle, content: r.content }));
+
+    // The model-facing result stays exactly as before - only what the
+    // model needs to answer and cite a source - never the embedding,
+    // chunk/document ids, or distance score. `sources` is a separate,
+    // internal-only record of the same already-authorized results (kept
+    // out of the model-facing value above) that tool-loop.ts's
+    // executeToolCall recognizes by this tool's name and splits out - it
+    // is never serialized into the provider-facing tool_result content
+    // (see buildToolResultBlock, which only ever sees `result`).
+    return {
+      result: results.map((r) => ({ documentTitle: r.documentTitle, content: r.content })),
+      sources: results.map((r) => ({ documentId: r.documentId, title: r.documentTitle })),
+    };
   },
 };

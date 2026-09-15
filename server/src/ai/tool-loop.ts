@@ -5,10 +5,20 @@ import { TOOLS } from "./tools";
 import type { ToolContext, ToolDefinition } from "./tools/types";
 import type { ProviderContentBlock, ProviderMessage, ProviderToolSpec } from "./provider";
 
+// Structured RAG citation metadata (Phase 16 Step 5) - only ever populated
+// from searchDocuments' own already-authorized retrieval result (see
+// extractDocumentSources below), never from model-controlled input or
+// anything reconstructed from assistant prose.
+export interface DocumentSourceRef {
+  documentId: string;
+  title: string;
+}
+
 export type TurnEvent =
   | { type: "text"; text: string }
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
+  | { type: "source"; sources: DocumentSourceRef[] }
   | { type: "done"; text: string };
 
 // Computed once, not per round - the tool set is fixed and small. Exported
@@ -44,7 +54,31 @@ export function parseToolArgs(tool: ToolDefinition<any>, input: unknown): unknow
   return tool.schema.parse(input);
 }
 
-export type ToolExecutionResult = { ok: true; result: unknown } | { ok: false };
+export type ToolExecutionResult =
+  | { ok: true; result: unknown; sources?: DocumentSourceRef[] }
+  | { ok: false };
+
+// searchDocuments is the one tool whose handler returns both the minimal,
+// model-facing result (still exactly { documentTitle, content }[], sent to
+// the provider unchanged) AND a separate, richer internal record of which
+// documents it drew from - kept apart deliberately so the model-facing
+// tool_result content never grows a documentId field. This is recognized
+// by name (not duck-typed) so no other tool's legitimate return shape can
+// ever be mistaken for it.
+interface SearchDocumentsHandlerResult {
+  result: unknown;
+  sources: DocumentSourceRef[];
+}
+
+function isSearchDocumentsHandlerResult(value: unknown): value is SearchDocumentsHandlerResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "result" in value &&
+    "sources" in value &&
+    Array.isArray((value as { sources: unknown }).sources)
+  );
+}
 
 // Executes ONE already-selected tool call: unknown tool, malformed
 // arguments, and any handler failure (including an access-check AppError)
@@ -61,14 +95,49 @@ export async function executeToolCall(
   try {
     if (!tool) throw new Error("Unknown tool"); // unknown tool
     const args = parseToolArgs(tool, input); // malformed arguments
-    const result = await tool.handler(args, ctx); // auth failure / execution failure
-    return { ok: true, result };
+    const raw = await tool.handler(args, ctx); // auth failure / execution failure
+
+    if (tool.name === "searchDocuments" && isSearchDocumentsHandlerResult(raw)) {
+      return { ok: true, result: raw.result, sources: raw.sources };
+    }
+
+    return { ok: true, result: raw };
   } catch {
     // Unknown tool, malformed args, an AppError from an access check, or
     // any other execution failure all collapse here - never leak internal
     // error text into the model's context.
     return { ok: false };
   }
+}
+
+// The one shared helper both runChatTurn and runAgentTurn call to decide
+// whether (and what) to emit as a `source` event after a tool call. Never
+// duplicated between the two orchestrators.
+export function extractDocumentSources(
+  tool: ToolDefinition<any> | undefined,
+  executionResult: ToolExecutionResult,
+): DocumentSourceRef[] {
+  if (tool?.name !== "searchDocuments" || !executionResult.ok || !executionResult.sources) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const sources: DocumentSourceRef[] = [];
+  for (const entry of executionResult.sources) {
+    const documentId = entry?.documentId;
+    const title = entry?.title;
+    if (
+      typeof documentId === "string" &&
+      documentId.length > 0 &&
+      typeof title === "string" &&
+      title.length > 0 &&
+      !seen.has(documentId)
+    ) {
+      seen.add(documentId);
+      sources.push({ documentId, title });
+    }
+  }
+  return sources;
 }
 
 // Never blindly slices a serialized JSON string - that can cut mid-object
@@ -227,6 +296,13 @@ export async function* runChatTurn(params: RunChatTurnParams): AsyncGenerator<Tu
       const executionResult = await executeToolCall(tool, use.input, params.toolContext);
       resultBlocks.push(buildToolResultBlock(use.id, executionResult, AI_LIMITS.MAX_TOOL_RESULT_CHARS));
       yield { type: "tool_result", name: use.name, ok: executionResult.ok };
+
+      // Only after a successful call, never for a failed one - and never
+      // an empty event when there's nothing to cite.
+      const sources = extractDocumentSources(tool, executionResult);
+      if (sources.length > 0) {
+        yield { type: "source", sources };
+      }
     }
 
     messages = [...messages, { role: "user", content: resultBlocks }];

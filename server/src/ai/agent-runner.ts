@@ -1,6 +1,14 @@
 import { getAIProvider } from "./index";
 import { AGENT_LIMITS, AI_LIMITS } from "./limits";
-import { PROVIDER_TOOL_SPECS, buildAssistantBlocks, executeToolCall, findTool, buildToolResultBlock } from "./tool-loop";
+import {
+  PROVIDER_TOOL_SPECS,
+  buildAssistantBlocks,
+  executeToolCall,
+  extractDocumentSources,
+  findTool,
+  buildToolResultBlock,
+  type DocumentSourceRef,
+} from "./tool-loop";
 import type { ToolContext } from "./tools/types";
 import type { ProviderContentBlock, ProviderMessage } from "./provider";
 
@@ -41,6 +49,7 @@ export type AgentTurnEvent =
   | { type: "text"; text: string }
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
+  | { type: "source"; sources: DocumentSourceRef[] }
   | { type: "done"; text: string }
   | { type: "error"; reason: AgentErrorReason };
 
@@ -197,6 +206,14 @@ export async function* runAgentTurn(params: RunAgentTurnParams): AsyncGenerator<
 
         resultBlocks.push(buildToolResultBlock(use.id, executionResult, limits.maxToolResultChars));
         yield { type: "tool_result", name: use.name, ok: executionResult.ok };
+
+        // Only after a successful call, never for a failed one, and never
+        // an empty event when there's nothing to cite. Reuses the exact
+        // same shared helper runChatTurn uses - no duplicated logic.
+        const sources = extractDocumentSources(tool, executionResult);
+        if (sources.length > 0) {
+          yield { type: "source", sources };
+        }
       }
 
       messages = [...messages, { role: "user", content: resultBlocks }];

@@ -91,6 +91,11 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
         res.write(`event: tool_call\ndata: ${JSON.stringify({ name: event.name, input: event.input })}\n\n`);
       } else if (event.type === "tool_result") {
         res.write(`event: tool_result\ndata: ${JSON.stringify({ name: event.name, ok: event.ok })}\n\n`);
+      } else if (event.type === "source") {
+        // Only documentId + title ever reach the browser - never chunk
+        // content, embeddings, distance, or chunkIndex. event.sources is
+        // already deduplicated and validated by extractDocumentSources.
+        res.write(`event: source\ndata: ${JSON.stringify({ sources: event.sources })}\n\n`);
       } else if (event.type === "done") {
         finalText = event.text;
       } else if (event.type === "error") {

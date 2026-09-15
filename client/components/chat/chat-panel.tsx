@@ -9,6 +9,7 @@ import { useApiData } from "@/lib/use-api-data";
 import { ChatInput } from "./chat-input";
 import { MessageBubble } from "./message-bubble";
 import { ModeToggle, type ChatMode } from "./mode-toggle";
+import { SourceFooter, type SourceRef } from "./source-footer";
 import { ToolActivity, type ToolActivityItem } from "./tool-activity";
 import type { ChatMessage, ChatMessageRole, ConversationSummary } from "@/lib/types";
 
@@ -29,6 +30,10 @@ interface LocalMessage {
   // than as one panel-wide list, so each turn keeps its own activity and a
   // new turn never leaks into or clears a previous one.
   toolActivity?: ToolActivityItem[];
+  // Structured RAG citations (Phase 16 Step 5) - same lifecycle as
+  // toolActivity above: scoped per-message, never inferred from the
+  // message's own text, and only ever populated from "source" SSE events.
+  sources?: SourceRef[];
 }
 
 export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
@@ -120,6 +125,17 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
             const nextActivity = [...message.toolActivity];
             nextActivity[index] = { ...nextActivity[index], status: event.ok ? "success" : "error" };
             return { ...message, toolActivity: nextActivity };
+          }),
+        );
+      } else if (event.type === "source") {
+        setLocalMessages((prev) =>
+          prev.map((message) => {
+            if (message.id !== assistantMessageId) return message;
+            const existing = message.sources ?? [];
+            const seen = new Set(existing.map((source) => source.documentId));
+            const additions = event.sources.filter((source) => !seen.has(source.documentId));
+            if (additions.length === 0) return message;
+            return { ...message, sources: [...existing, ...additions] };
           }),
         );
       } else if (event.type === "done") {
@@ -216,6 +232,7 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
               <ToolActivity items={message.toolActivity} />
             )}
             <MessageBubble role={message.role} content={message.content} />
+            {message.sources && message.sources.length > 0 && <SourceFooter sources={message.sources} />}
             {message.failed && (
               <p className="mt-1 text-right text-xs text-destructive">
                 This response failed to generate.

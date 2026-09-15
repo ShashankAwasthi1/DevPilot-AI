@@ -31,18 +31,22 @@ test("searchDocuments handler calls the retrieval service with exactly ToolConte
 
   const { searchDocumentsTool } = await import("./search-documents.tool");
 
-  const result = await searchDocumentsTool.handler(
+  const result = (await searchDocumentsTool.handler(
     { query: "how do I authenticate?", limit: 2 },
     { userId: "u1", projectId: "p1" },
-  );
+  )) as { result: unknown; sources: unknown };
 
   assert.deepEqual(recordedArgs, ["u1", "p1", "how do I authenticate?", 2]);
 
-  // Compact result shape - only what the model needs, never the
-  // embedding, ids, or distance score.
-  assert.deepEqual(result, [
+  // Model-facing result stays compact - only what the model needs, never
+  // the embedding, ids, or distance score.
+  assert.deepEqual(result.result, [
     { documentTitle: "API Authentication Guide", content: "Use a Bearer token in the Authorization header." },
   ]);
+
+  // The separate, internal-only sources record (Phase 16 Step 5) - never
+  // sent to the model, only ever read by tool-loop.ts's executeToolCall.
+  assert.deepEqual(result.sources, [{ documentId: "doc-1", title: "API Authentication Guide" }]);
 });
 
 test("searchDocuments propagates a retrieval failure rather than masking it (tool-loop's existing generic handling applies)", async () => {
