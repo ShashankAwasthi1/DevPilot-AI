@@ -4,10 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { streamChatMessage } from "@/lib/ai-chat";
+import { streamChatMessage, type StreamChatEvent } from "@/lib/ai-chat";
 import { useApiData } from "@/lib/use-api-data";
 import { ChatInput } from "./chat-input";
 import { MessageBubble } from "./message-bubble";
+import { ModeToggle, type ChatMode } from "./mode-toggle";
 import type { ChatMessage, ChatMessageRole, ConversationSummary } from "@/lib/types";
 
 interface ChatPanelProps {
@@ -38,6 +39,10 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
   // resets to [] rather than needing an effect to clear it.
   const [localMessages, setLocalMessages] = useState<LocalMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
+  // Local-only, per Phase 16 Step 2 scope - not persisted server-side, not
+  // reflected in the URL, and reset naturally whenever this component is
+  // remounted with a new conversation (same as localMessages below).
+  const [mode, setMode] = useState<ChatMode>("chat");
   const abortRef = useRef<AbortController | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -63,32 +68,35 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
     const controller = new AbortController();
     abortRef.current = controller;
 
+    function handleStreamEvent(event: StreamChatEvent) {
+      if (event.type === "text") {
+        setLocalMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantMessageId
+              ? { ...message, content: message.content + event.text }
+              : message,
+          ),
+        );
+      } else if (event.type === "done") {
+        setStreaming(false);
+      } else if (event.type === "error") {
+        setStreaming(false);
+        setLocalMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantMessageId ? { ...message, failed: true } : message,
+          ),
+        );
+      }
+      // tool_call / tool_result: received but intentionally not rendered
+      // yet - a later Phase 16 step adds tool-activity UI. Ignoring them
+      // here is safe: they never affect message content or stream state.
+    }
+
     void streamChatMessage(
       projectId,
       conversationId,
       content,
-      {
-        onDelta: (delta) => {
-          setLocalMessages((prev) =>
-            prev.map((message) =>
-              message.id === assistantMessageId
-                ? { ...message, content: message.content + delta }
-                : message,
-            ),
-          );
-        },
-        onDone: () => {
-          setStreaming(false);
-        },
-        onError: () => {
-          setStreaming(false);
-          setLocalMessages((prev) =>
-            prev.map((message) =>
-              message.id === assistantMessageId ? { ...message, failed: true } : message,
-            ),
-          );
-        },
-      },
+      { mode, onEvent: handleStreamEvent },
       controller.signal,
     );
   }
@@ -140,7 +148,17 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
         ))}
         <div ref={bottomRef} />
       </div>
-      <ChatInput onSend={handleSend} disabled={streaming} />
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <ModeToggle mode={mode} onModeChange={setMode} disabled={streaming} />
+          {mode === "agent" && (
+            <p className="text-xs text-muted-foreground">
+              Agent mode may take longer and can use project tools.
+            </p>
+          )}
+        </div>
+        <ChatInput onSend={handleSend} disabled={streaming} />
+      </div>
     </div>
   );
 }
