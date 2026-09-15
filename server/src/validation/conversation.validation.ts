@@ -7,6 +7,11 @@ export const createConversationSchema = z.object({
 
 export const createMessageSchema = z.object({
   content: z.string().trim().min(1).max(AI_LIMITS.MAX_USER_MESSAGE_LENGTH),
+  // Phase 15: selects which orchestrator handles this message -
+  // "chat" (default, existing behavior) or the bounded multi-step "agent".
+  // A strict enum only - never an arbitrary string, and userId/projectId
+  // are never accepted here or anywhere else in this payload.
+  mode: z.enum(["chat", "agent"]).default("chat"),
 });
 
 // Query params arrive as strings (or undefined) - coerce/parse explicitly,

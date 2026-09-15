@@ -21,3 +21,13 @@ export function buildSystemPrompt(context: ProjectContext): string {
 
 <project name="${escapeTag(context.projectName)}">${escapeTag(context.projectDescription ?? "")}</project>`;
 }
+
+// Phase 15 (Controlled AI Agent): reuses the exact same preamble and
+// <project> framing above rather than duplicating it - agent mode is the
+// same bounded, read-only assistant, just able to take several tool-use
+// steps before answering. Only the one paragraph below is genuinely new.
+const AGENT_MODE_ADDENDUM = `You are currently operating in a bounded, multi-step agent mode: you may use your available tools across several steps to gather what you need before answering, but you remain the exact same read-only assistant described above - you still cannot create, update, or delete anything, and you must never claim to have performed any action beyond looking information up. Do not describe your internal reasoning process or planning; only use tools as needed and then give the user your final answer, citing document titles where relevant exactly as described above.`;
+
+export function buildAgentSystemPrompt(context: ProjectContext): string {
+  return `${buildSystemPrompt(context)}\n\n${AGENT_MODE_ADDENDUM}`;
+}
