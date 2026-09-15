@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getAIProvider } from "./index";
 import { AI_LIMITS } from "./limits";
 import { TOOLS } from "./tools";
-import type { ToolContext } from "./tools/types";
+import type { ToolContext, ToolDefinition } from "./tools/types";
 import type { ProviderContentBlock, ProviderMessage, ProviderToolSpec } from "./provider";
 
 export type TurnEvent =
@@ -17,6 +17,57 @@ const PROVIDER_TOOL_SPECS: ProviderToolSpec[] = TOOLS.map((tool) => ({
   description: tool.description,
   inputSchema: z.toJSONSchema(tool.schema) as Record<string, unknown>,
 }));
+
+// --- Shared per-call tool execution primitives ---------------------------
+//
+// These are extracted (Phase 15 Step 2a) so a future AgentRunner can reuse
+// exactly the same tool-call mechanics runChatTurn already relies on and
+// already has tests for. Deliberately NOT extracted: round/call-count
+// policy (offering tools, the round loop, the MAX_TOOL_CALLS_TOTAL cap) -
+// that orchestration stays in runChatTurn below, since it's precisely what
+// must differ between an ordinary chat turn and an agent turn. Each
+// primitive here represents the execution of one already-selected tool
+// call, nothing about how many calls are allowed.
+
+// Pure lookup of a tool by name from the existing TOOLS registry.
+export function findTool(name: string): ToolDefinition<any> | undefined {
+  return TOOLS.find((t) => t.name === name);
+}
+
+// Validates model-provided tool input against the tool's own (already
+// .strict()) Zod schema. Throws (ZodError) on invalid input, exactly as
+// `tool.schema.parse` already does - callers are responsible for handling
+// that, matching the previous inline behavior.
+export function parseToolArgs(tool: ToolDefinition<any>, input: unknown): unknown {
+  return tool.schema.parse(input);
+}
+
+export type ToolExecutionResult = { ok: true; result: unknown } | { ok: false };
+
+// Executes ONE already-selected tool call: unknown tool, malformed
+// arguments, and any handler failure (including an access-check AppError)
+// all collapse to the same safe, non-throwing `{ ok: false }` outcome -
+// this function never rejects and never leaks internal error details to
+// its caller. Orchestration concerns (whether this call is allowed to run
+// at all, i.e. the total-call cap) are the caller's responsibility, not
+// this primitive's - it always executes what it's given.
+export async function executeToolCall(
+  tool: ToolDefinition<any> | undefined,
+  input: unknown,
+  ctx: ToolContext,
+): Promise<ToolExecutionResult> {
+  try {
+    if (!tool) throw new Error("Unknown tool"); // unknown tool
+    const args = parseToolArgs(tool, input); // malformed arguments
+    const result = await tool.handler(args, ctx); // auth failure / execution failure
+    return { ok: true, result };
+  } catch {
+    // Unknown tool, malformed args, an AppError from an access check, or
+    // any other execution failure all collapse here - never leak internal
+    // error text into the model's context.
+    return { ok: false };
+  }
+}
 
 // Never blindly slices a serialized JSON string - that can cut mid-object
 // and hand the model malformed/misleading structured data. For the
@@ -39,6 +90,31 @@ function boundToolResult(result: unknown, maxChars: number): string {
   }
 
   return JSON.stringify({ truncated: true, note: "Result too large to include in full." });
+}
+
+// Converts one executeToolCall outcome into the exact `tool_result`
+// content block shape runChatTurn has always produced: bounded JSON on
+// success, or the fixed, safe error string on failure. The fixed string
+// below must stay byte-identical - it's the one guarantee that no internal
+// error detail ever reaches the model.
+export function buildToolResultBlock(
+  toolUseId: string,
+  executionResult: ToolExecutionResult,
+  maxChars: number,
+): ProviderContentBlock {
+  if (executionResult.ok) {
+    return {
+      type: "tool_result",
+      toolUseId,
+      content: boundToolResult(executionResult.result, maxChars),
+    };
+  }
+  return {
+    type: "tool_result",
+    toolUseId,
+    content: "This tool call could not be completed.",
+    isError: true,
+  };
 }
 
 function buildAssistantBlocks(
@@ -144,30 +220,10 @@ export async function* runChatTurn(params: RunChatTurnParams): AsyncGenerator<Tu
 
       toolCallCount++;
 
-      const tool = TOOLS.find((t) => t.name === use.name);
-      try {
-        if (!tool) throw new Error("Unknown tool"); // unknown tool
-        const args = tool.schema.parse(use.input); // malformed arguments
-        const result = await tool.handler(args, params.toolContext); // auth failure / execution failure
-        resultBlocks.push({
-          type: "tool_result",
-          toolUseId: use.id,
-          content: boundToolResult(result, AI_LIMITS.MAX_TOOL_RESULT_CHARS),
-        });
-        yield { type: "tool_result", name: use.name, ok: true };
-      } catch {
-        // Unknown tool, malformed args, an AppError from an access check,
-        // or any other execution failure all collapse to the same generic,
-        // safe message - never leak internal error text into the model's
-        // context.
-        resultBlocks.push({
-          type: "tool_result",
-          toolUseId: use.id,
-          content: "This tool call could not be completed.",
-          isError: true,
-        });
-        yield { type: "tool_result", name: use.name, ok: false };
-      }
+      const tool = findTool(use.name);
+      const executionResult = await executeToolCall(tool, use.input, params.toolContext);
+      resultBlocks.push(buildToolResultBlock(use.id, executionResult, AI_LIMITS.MAX_TOOL_RESULT_CHARS));
+      yield { type: "tool_result", name: use.name, ok: executionResult.ok };
     }
 
     messages = [...messages, { role: "user", content: resultBlocks }];
