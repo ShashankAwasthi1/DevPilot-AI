@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
-import { FolderKanban, MessageSquare } from "lucide-react";
+import { FolderKanban } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -76,9 +76,9 @@ export function ProjectsSection() {
                     <span>Updated {formatRelativeTime(project.updatedAt)}</span>
                   </div>
                   <Button variant="outline" size="sm" className="w-fit gap-1.5" asChild>
-                    <Link href={`/projects/${project.id}/chat`}>
-                      <MessageSquare className="size-3.5" aria-hidden="true" />
-                      Chat
+                    <Link href={`/projects/${project.id}`}>
+                      <FolderKanban className="size-3.5" aria-hidden="true" />
+                      Open
                     </Link>
                   </Button>
                 </CardContent>

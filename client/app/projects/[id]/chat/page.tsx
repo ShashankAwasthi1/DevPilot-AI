@@ -1,9 +1,12 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
 import { ChatPanel } from "@/components/chat/chat-panel";
 import { ConversationList } from "@/components/chat/conversation-list";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError } from "@/lib/api";
 import { useApiData } from "@/lib/use-api-data";
@@ -96,7 +99,15 @@ export default function ProjectChatPage(props: PageProps<"/projects/[id]/chat">)
 
   return (
     <main className="mx-auto grid max-w-5xl gap-6 px-4 py-10 sm:px-6 lg:grid-cols-[280px_1fr]">
-      <h1 className="sr-only">Project chat</h1>
+      <div className="lg:col-span-2">
+        <h1 className="sr-only">Project chat</h1>
+        <Button variant="ghost" size="sm" className="w-fit gap-1.5" asChild>
+          <Link href={`/projects/${projectId}`}>
+            <ArrowLeft className="size-3.5" aria-hidden="true" />
+            Back to tasks
+          </Link>
+        </Button>
+      </div>
       <ConversationList
         conversations={listData?.conversations ?? null}
         loading={listLoading}

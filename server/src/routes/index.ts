@@ -7,6 +7,7 @@ import documentRoutes from "./document.routes";
 import healthRoutes from "./health.routes";
 import notificationRoutes from "./notification.routes";
 import projectRoutes from "./project.routes";
+import taskRoutes from "./task.routes";
 import userRoutes from "./user.routes";
 
 const router = Router();
@@ -18,6 +19,13 @@ router.use("/projects", projectRoutes);
 router.use("/projects", documentRoutes);
 router.use("/projects", conversationRoutes);
 router.use("/tasks", commentRoutes);
+// taskRoutes declares its own full paths (/projects/:projectId/tasks and
+// /tasks/:id) rather than a shared prefix - mounted with no prefix here,
+// same as healthRoutes. Its /tasks/:id shape can never collide with
+// commentRoutes' /tasks/:taskId/comments above - the trailing /comments
+// segment means only one of the two patterns can ever match a given
+// request, regardless of registration order.
+router.use(taskRoutes);
 router.use("/notifications", notificationRoutes);
 router.use("/dashboard", dashboardRoutes);
 

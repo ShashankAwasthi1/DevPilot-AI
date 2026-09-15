@@ -73,3 +73,41 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
 }
+
+// Mirrors server/src/prisma/schema.prisma's TaskStatus/TaskPriority enums
+// exactly (also re-declared as Zod enums in
+// server/src/validation/task.validation.ts).
+export type TaskStatus = "TODO" | "IN_PROGRESS" | "IN_REVIEW" | "DONE";
+export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+
+// Mirrors server/src/services/task.service.ts's TaskDto - the full shape
+// returned by POST/PATCH /projects/:projectId/tasks and /tasks/:id.
+export interface Task {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assigneeId: string | null;
+  createdById: string;
+  dueDate: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Mirrors server/src/services/task.service.ts's TaskSummaryDto - the
+// smaller shape returned by GET /projects/:projectId/tasks
+// (listTaskSummariesForProject). Deliberately not the same shape as Task:
+// the list endpoint reuses the existing read-only summary the AI's
+// getTasks tool already relies on, rather than a second, fuller listing
+// implementation - so description/assigneeId/createdById/dueDate/
+// createdAt/updatedAt/projectId are not available from the list response
+// today, only from a single task's create/update response.
+export interface TaskSummary {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assigneeName: string | null;
+}
