@@ -35,3 +35,18 @@ export const AI_LIMITS = {
   MAX_SEARCH_RESULTS: 5,
   MAX_SEARCH_QUERY_LENGTH: 300,
 } as const;
+
+// Phase 15 (Controlled AI Agent) - deliberately separate from AI_LIMITS
+// above rather than additional keys on it: these bound a different
+// orchestrator (agent-runner.ts's runAgentTurn) with its own round/call
+// budget, and must never be confused with or accidentally repurpose
+// ordinary chat's MAX_TOOL_ROUNDS/MAX_TOOL_CALLS_TOTAL. Output-size and
+// tool-result-size bounds are NOT duplicated here - those are properties of
+// a single provider round/tool result, not of which orchestrator is
+// calling, so runAgentTurn's defaults reuse AI_LIMITS.MAX_OUTPUT_TOKENS and
+// AI_LIMITS.MAX_TOOL_RESULT_CHARS directly.
+export const AGENT_LIMITS = {
+  MAX_AGENT_ROUNDS: 8,
+  MAX_AGENT_TOOL_CALLS_TOTAL: 12,
+  MAX_AGENT_TIMEOUT_MS: 60000,
+} as const;

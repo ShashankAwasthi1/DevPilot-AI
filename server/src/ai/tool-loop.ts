@@ -11,8 +11,10 @@ export type TurnEvent =
   | { type: "tool_result"; name: string; ok: boolean }
   | { type: "done"; text: string };
 
-// Computed once, not per round - the tool set is fixed and small.
-const PROVIDER_TOOL_SPECS: ProviderToolSpec[] = TOOLS.map((tool) => ({
+// Computed once, not per round - the tool set is fixed and small. Exported
+// (Phase 15 Step 4) so agent-runner.ts's own round loop can offer the exact
+// same tool specs without recomputing them.
+export const PROVIDER_TOOL_SPECS: ProviderToolSpec[] = TOOLS.map((tool) => ({
   name: tool.name,
   description: tool.description,
   inputSchema: z.toJSONSchema(tool.schema) as Record<string, unknown>,
@@ -117,7 +119,8 @@ export function buildToolResultBlock(
   };
 }
 
-function buildAssistantBlocks(
+// Exported (Phase 15 Step 4) so agent-runner.ts can reuse it unchanged.
+export function buildAssistantBlocks(
   text: string,
   toolUses: { id: string; name: string; input: unknown }[],
 ): ProviderContentBlock[] {
