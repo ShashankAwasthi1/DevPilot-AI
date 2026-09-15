@@ -60,6 +60,31 @@ export default function ProjectChatPage(props: PageProps<"/projects/[id]/chat">)
     }
   }
 
+  // No optimistic list mutation here on purpose - the mutation completes
+  // first, then refreshKey bumps to let the existing useApiData refetch
+  // remain the single source of truth for the list's contents. Renaming
+  // never touches activeConversationId, so it can never remount ChatPanel
+  // or interrupt an in-flight stream, active conversation or not.
+  async function handleRename(conversationId: string, title: string) {
+    await api.patch(`/projects/${projectId}/conversations/${conversationId}`, { title });
+    setRefreshKey((key) => key + 1);
+  }
+
+  // Clearing activeConversationId happens immediately after the DELETE
+  // resolves, before the list refetch - effectiveConversationId then falls
+  // back to the newest remaining conversation (or null) once listData
+  // updates, and ChatPanel's existing key={effectiveConversationId} takes
+  // care of unmounting/remounting itself. Deleting a non-active
+  // conversation never touches activeConversationId at all, so the active
+  // ChatPanel/stream is never affected.
+  async function handleDelete(conversationId: string) {
+    await api.delete(`/projects/${projectId}/conversations/${conversationId}`);
+    if (conversationId === activeConversationId) {
+      setActiveConversationId(null);
+    }
+    setRefreshKey((key) => key + 1);
+  }
+
   if (authLoading || authError || !user) {
     return (
       <main className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-10 sm:px-6">
@@ -81,6 +106,8 @@ export default function ProjectChatPage(props: PageProps<"/projects/[id]/chat">)
         onNewChat={handleNewChat}
         creating={creating}
         createError={createError}
+        onRename={handleRename}
+        onDelete={handleDelete}
       />
 
       <div className="min-h-[28rem] rounded-xl border border-border bg-card p-4">

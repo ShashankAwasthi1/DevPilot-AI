@@ -2,7 +2,7 @@ import { Conversation } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
 import { getProjectAccess } from "./project.service";
-import type { CreateConversationInput } from "../validation/conversation.validation";
+import type { CreateConversationInput, UpdateConversationInput } from "../validation/conversation.validation";
 
 export interface ConversationDto {
   id: string;
@@ -105,4 +105,47 @@ export async function getConversationForProject(
 ): Promise<ConversationDto> {
   const { conversation } = await getConversationAccess(projectId, conversationId, userId);
   return toConversationDto(conversation);
+}
+
+// Phase 16 Step 8 - renaming a conversation. getConversationAccess remains
+// the sole authorization boundary: it's called first, and only its
+// resolved conversation's own `id` is ever used for the write below - the
+// caller's projectId/userId are never written anywhere, only used to
+// authorize which single row may be touched. `data` is deliberately a
+// literal `{ title }` object, never a spread of `input`, so no future
+// field added to UpdateConversationInput could accidentally become
+// writable here without this line itself being changed.
+export async function updateConversationTitle(
+  projectId: string,
+  conversationId: string,
+  userId: string,
+  input: UpdateConversationInput,
+): Promise<ConversationDto> {
+  const { conversation } = await getConversationAccess(projectId, conversationId, userId);
+
+  const updated = await prisma.conversation.update({
+    where: { id: conversation.id },
+    data: { title: input.title },
+  });
+
+  return toConversationDto(updated);
+}
+
+// Phase 16 Step 8 - deleting a conversation. Same authorization boundary
+// as above. A genuine hard delete - no archivedAt/soft-delete field exists
+// on this model and none is added here. Message rows are removed entirely
+// through the existing Conversation -> Message onDelete: Cascade relation
+// (see schema.prisma) - this function never touches the Message table
+// itself, so there is nothing to keep in sync if that relation ever
+// changes.
+export async function deleteConversation(
+  projectId: string,
+  conversationId: string,
+  userId: string,
+): Promise<void> {
+  const { conversation } = await getConversationAccess(projectId, conversationId, userId);
+
+  await prisma.conversation.delete({
+    where: { id: conversation.id },
+  });
 }

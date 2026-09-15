@@ -46,6 +46,32 @@ export function makeFakeResponse(): { res: Response; state: FakeResponseState } 
   return { res, state };
 }
 
+export interface FakeJsonResponseState {
+  statusCode: number | null;
+  body: unknown;
+}
+
+// A separate fake response for ordinary (non-SSE) JSON controllers - kept
+// distinct from makeFakeResponse above (which models the streaming
+// res.write/res.end shape message.controller.ts needs) rather than
+// overloading one fake with both shapes.
+export function makeFakeJsonResponse(): { res: Response; state: FakeJsonResponseState } {
+  const state: FakeJsonResponseState = { statusCode: null, body: undefined };
+
+  const res = {
+    status: (code: number) => {
+      state.statusCode = code;
+      return res;
+    },
+    json: (body: unknown) => {
+      state.body = body;
+      return res;
+    },
+  } as unknown as Response;
+
+  return { res, state };
+}
+
 export function throwingNext(): NextFunction {
   return ((err?: unknown) => {
     throw new Error(`next(err) should not be called on this path: ${String(err)}`);

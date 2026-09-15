@@ -5,6 +5,14 @@ export const createConversationSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
 });
 
+// Phase 16 Step 8 - renaming a conversation. Unlike create's optional
+// title, a rename with no title doesn't mean anything, so this is
+// required - same trim-then-length-bound convention and bounds (1-200
+// chars after trim) as createConversationSchema's own title field.
+export const updateConversationSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+});
+
 export const createMessageSchema = z.object({
   content: z.string().trim().min(1).max(AI_LIMITS.MAX_USER_MESSAGE_LENGTH),
   // Phase 15: selects which orchestrator handles this message -
@@ -22,5 +30,6 @@ export const listConversationsQuerySchema = z.object({
 });
 
 export type CreateConversationInput = z.infer<typeof createConversationSchema>;
+export type UpdateConversationInput = z.infer<typeof updateConversationSchema>;
 export type CreateMessageInput = z.infer<typeof createMessageSchema>;
 export type ListConversationsQuery = z.infer<typeof listConversationsQuerySchema>;
