@@ -4,36 +4,18 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import { streamChatMessage, type StreamChatEvent } from "@/lib/ai-chat";
 import { useApiData } from "@/lib/use-api-data";
 import { ChatInput } from "./chat-input";
 import { MessageBubble } from "./message-bubble";
 import { ModeToggle, type ChatMode } from "./mode-toggle";
-import { SourceFooter, type SourceRef } from "./source-footer";
-import { ToolActivity, type ToolActivityItem } from "./tool-activity";
-import type { ChatMessage, ChatMessageRole, ConversationSummary } from "@/lib/types";
+import { SourceFooter } from "./source-footer";
+import { ToolActivity } from "./tool-activity";
+import { useChatTurn, type LocalMessage } from "./use-chat-turn";
+import type { ChatMessage, ConversationSummary } from "@/lib/types";
 
 interface ChatPanelProps {
   projectId: string;
   conversationId: string;
-}
-
-interface LocalMessage {
-  id: string;
-  role: ChatMessageRole;
-  content: string;
-  failed?: boolean;
-  // Only ever set on the assistant message currently (or having just
-  // finished) streaming in this session - history fetched from the server
-  // never has this, since tool calls aren't persisted (see
-  // server/src/services/message.service.ts). Scoped per-message rather
-  // than as one panel-wide list, so each turn keeps its own activity and a
-  // new turn never leaks into or clears a previous one.
-  toolActivity?: ToolActivityItem[];
-  // Structured RAG citations (Phase 16 Step 5) - same lifecycle as
-  // toolActivity above: scoped per-message, never inferred from the
-  // message's own text, and only ever populated from "source" SSE events.
-  sources?: SourceRef[];
 }
 
 export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
@@ -45,151 +27,20 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
     [projectId, conversationId],
   );
 
-  // Messages sent in this session, layered on top of the fetched history -
-  // no retry in Phase 12, so a failed turn just stays marked as failed
-  // rather than being resent or removed. The parent remounts this component
-  // with a new `key` when the conversation changes, so this state naturally
-  // resets to [] rather than needing an effect to clear it.
-  const [localMessages, setLocalMessages] = useState<LocalMessage[]>([]);
-  const [streaming, setStreaming] = useState(false);
   // Local-only, per Phase 16 Step 2 scope - not persisted server-side, not
   // reflected in the URL, and reset naturally whenever this component is
-  // remounted with a new conversation (same as localMessages below).
+  // remounted with a new conversation (same as the hook's messages below).
   const [mode, setMode] = useState<ChatMode>("chat");
-  const abortRef = useRef<AbortController | null>(null);
-  // Tracks which local assistant message the in-flight stream belongs to,
-  // so handleStop can update that specific message's tool activity without
-  // handleSend needing to lift assistantMessageId into component state.
-  const currentAssistantIdRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const { messages: localMessages, streaming, sendMessage, stop } = useChatTurn({
+    projectId,
+    conversationId,
+  });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [localMessages, data]);
-
-  useEffect(() => {
-    return () => abortRef.current?.abort();
-  }, []);
-
-  function handleSend(content: string) {
-    const userMessageId = `local-user-${Date.now()}`;
-    const assistantMessageId = `local-assistant-${Date.now()}`;
-
-    setLocalMessages((prev) => [
-      ...prev,
-      { id: userMessageId, role: "USER", content },
-      { id: assistantMessageId, role: "ASSISTANT", content: "" },
-    ]);
-    setStreaming(true);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    currentAssistantIdRef.current = assistantMessageId;
-
-    function handleStreamEvent(event: StreamChatEvent) {
-      if (event.type === "text") {
-        setLocalMessages((prev) =>
-          prev.map((message) =>
-            message.id === assistantMessageId
-              ? { ...message, content: message.content + event.text }
-              : message,
-          ),
-        );
-      } else if (event.type === "tool_call") {
-        setLocalMessages((prev) =>
-          prev.map((message) => {
-            if (message.id !== assistantMessageId) return message;
-            const existing = message.toolActivity ?? [];
-            const item: ToolActivityItem = {
-              // Includes the running count so repeated calls to the same
-              // tool within one turn each get their own stable, unique key.
-              id: `${assistantMessageId}-tool-${existing.length}`,
-              name: event.name,
-              status: "running",
-            };
-            return { ...message, toolActivity: [...existing, item] };
-          }),
-        );
-      } else if (event.type === "tool_result") {
-        setLocalMessages((prev) =>
-          prev.map((message) => {
-            if (message.id !== assistantMessageId || !message.toolActivity) return message;
-            // Tool calls execute strictly one at a time, in order (see
-            // server/src/ai/tool-loop.ts / agent-runner.ts), and each
-            // tool_result always corresponds to the oldest still-running
-            // call - the backend's tool_result event has no call id to
-            // match against, so this ordering guarantee is what makes
-            // matching correct even when the same tool is called twice.
-            const index = message.toolActivity.findIndex((item) => item.status === "running");
-            if (index === -1) return message;
-            const nextActivity = [...message.toolActivity];
-            nextActivity[index] = { ...nextActivity[index], status: event.ok ? "success" : "error" };
-            return { ...message, toolActivity: nextActivity };
-          }),
-        );
-      } else if (event.type === "source") {
-        setLocalMessages((prev) =>
-          prev.map((message) => {
-            if (message.id !== assistantMessageId) return message;
-            const existing = message.sources ?? [];
-            const seen = new Set(existing.map((source) => source.documentId));
-            const additions = event.sources.filter((source) => !seen.has(source.documentId));
-            if (additions.length === 0) return message;
-            return { ...message, sources: [...existing, ...additions] };
-          }),
-        );
-      } else if (event.type === "done") {
-        setStreaming(false);
-        abortRef.current = null;
-        currentAssistantIdRef.current = null;
-      } else if (event.type === "error") {
-        setStreaming(false);
-        abortRef.current = null;
-        currentAssistantIdRef.current = null;
-        setLocalMessages((prev) =>
-          prev.map((message) =>
-            message.id === assistantMessageId ? { ...message, failed: true } : message,
-          ),
-        );
-      }
-    }
-
-    void streamChatMessage(
-      projectId,
-      conversationId,
-      content,
-      { mode, onEvent: handleStreamEvent },
-      controller.signal,
-    );
-  }
-
-  // The user intentionally cancelled generation. streamChatMessage's
-  // AbortError handling never calls onEvent for an aborted turn (by
-  // design - see ai-chat.ts), so nothing there will ever set streaming
-  // back to false or touch tool activity for us; this handler is the only
-  // place that does it, and it does so unconditionally rather than
-  // relying on the stream to notice the cancellation.
-  function handleStop() {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setStreaming(false);
-
-    const assistantId = currentAssistantIdRef.current;
-    currentAssistantIdRef.current = null;
-    if (!assistantId) return;
-
-    setLocalMessages((prev) =>
-      prev.map((message) => {
-        if (message.id !== assistantId || !message.toolActivity) return message;
-        // Never let a call that was still running when the user stopped
-        // read as "success" - it stays visibly incomplete instead.
-        const nextActivity = message.toolActivity.map((item) =>
-          item.status === "running" ? { ...item, status: "stopped" as const } : item,
-        );
-        return { ...message, toolActivity: nextActivity };
-      }),
-    );
-  }
 
   if (loading) {
     return (
@@ -251,7 +102,7 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
             </p>
           )}
         </div>
-        <ChatInput onSend={handleSend} onStop={handleStop} streaming={streaming} />
+        <ChatInput onSend={(content) => sendMessage(content, mode)} onStop={stop} streaming={streaming} />
       </div>
     </div>
   );
