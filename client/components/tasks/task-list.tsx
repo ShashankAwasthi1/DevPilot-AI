@@ -1,18 +1,20 @@
 "use client";
 
-import { useMemo, useState, type MouseEvent } from "react";
-import { CheckCircle2, Eye, ListTodo, Pencil, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
+import { CheckCircle2, ListTodo } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { ApiError } from "@/lib/api";
+import type { ApiError } from "@/lib/api";
 import type { UpdateTaskInput } from "@/lib/tasks";
 import type { ProjectMember, Task, TaskSummary } from "@/lib/types";
-import { EditTaskSheet } from "./edit-task-sheet";
-import { TaskDetailsSheet } from "./task-details-sheet";
+import { TaskCardActions, TaskDeleteConfirm } from "./task-card-shared";
+import { TaskKanban } from "./task-kanban";
+import { TaskViewToggle, type TaskView } from "./task-view-toggle";
+import { useTaskDeleteConfirm } from "./use-task-delete-confirm";
 import { PRIORITY_BADGE_VARIANT, PRIORITY_LABEL, PRIORITY_SORT_ORDER, STATUS_BADGE_VARIANT, STATUS_LABEL } from "./task-labels";
 import { DEFAULT_TASK_FILTERS, TaskFilters, type TaskFilterState } from "./task-filters";
 
@@ -116,6 +118,10 @@ export function TaskList({
   onRetryMembers,
 }: TaskListProps) {
   const [filters, setFilters] = useState<TaskFilterState>(DEFAULT_TASK_FILTERS);
+  // Client-side UI state only - never persisted, never a URL param (the
+  // existing task workspace doesn't use query params for view state
+  // anywhere else). Defaults to List, per this part's spec.
+  const [view, setView] = useState<TaskView>("list");
 
   const assigneeOptions = useMemo(() => {
     if (!tasks) return [];
@@ -183,11 +189,14 @@ export function TaskList({
         onClear={handleClearFilters}
       />
 
-      <p className="text-xs text-muted-foreground">
-        {displayedTasks.length === tasks.length
-          ? `${tasks.length} task${tasks.length === 1 ? "" : "s"}`
-          : `Showing ${displayedTasks.length} of ${tasks.length} tasks`}
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-muted-foreground">
+          {displayedTasks.length === tasks.length
+            ? `${tasks.length} task${tasks.length === 1 ? "" : "s"}`
+            : `Showing ${displayedTasks.length} of ${tasks.length} tasks`}
+        </p>
+        <TaskViewToggle view={view} onViewChange={setView} />
+      </div>
 
       {displayedTasks.length === 0 ? (
         <Card>
@@ -199,7 +208,7 @@ export function TaskList({
             </Button>
           </CardContent>
         </Card>
-      ) : (
+      ) : view === "list" ? (
         <ul className="flex flex-col gap-2">
           {displayedTasks.map((task) => (
             <TaskRow
@@ -216,6 +225,18 @@ export function TaskList({
             />
           ))}
         </ul>
+      ) : (
+        <TaskKanban
+          tasks={displayedTasks}
+          getCachedTask={getCachedTask}
+          fetchTask={fetchTask}
+          onUpdate={onUpdate}
+          onDelete={onDelete}
+          members={members}
+          membersLoading={membersLoading}
+          membersError={membersError}
+          onRetryMembers={onRetryMembers}
+        />
       )}
     </div>
   );
@@ -235,8 +256,10 @@ interface TaskRowProps {
 
 // Mirrors ConversationRow's (Phase 16 Step 8) inline confirm-swap delete
 // pattern - the established precedent for delete confirmation in this
-// codebase, reused here rather than introducing a new AlertDialog
-// primitive (none exists yet, and this part is meant to stay focused).
+// codebase. Delete-confirm state and the View/Edit/Delete-trigger cluster
+// now live in use-task-delete-confirm.ts/task-card-shared.tsx so the
+// Kanban card (task-kanban.tsx) can reuse the exact same behavior instead
+// of a second implementation.
 function TaskRow({
   task,
   cachedTask,
@@ -248,56 +271,14 @@ function TaskRow({
   membersError,
   onRetryMembers,
 }: TaskRowProps) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const { confirming, deleting, error, start, cancel, confirm } = useTaskDeleteConfirm(task.id, onDelete);
 
-  function startConfirmingDelete(event: MouseEvent) {
-    event.stopPropagation();
-    setDeleteError(null);
-    setConfirmingDelete(true);
-  }
-
-  function cancelDelete(event: MouseEvent) {
-    event.stopPropagation();
-    setConfirmingDelete(false);
-    setDeleteError(null);
-  }
-
-  async function confirmDelete(event: MouseEvent) {
-    event.stopPropagation();
-    if (deleting) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      await onDelete(task.id);
-      // On success, the parent's refetch removes this row entirely once
-      // it lands - nothing further to do here.
-    } catch (err) {
-      setDeleteError(err instanceof ApiError ? err.message : "Something went wrong.");
-      setDeleting(false);
-    }
-  }
-
-  if (confirmingDelete) {
+  if (confirming) {
     return (
       <li>
         <Card className="border-destructive/30 bg-destructive/5">
-          <CardContent className="flex flex-col gap-2">
-            <p className="text-sm font-medium">Delete task?</p>
-            <p className="text-sm text-muted-foreground">
-              This will permanently delete <span className="font-medium text-foreground">{task.title}</span>.
-              This action cannot be undone.
-            </p>
-            <div className="flex items-center gap-2">
-              <Button type="button" variant="destructive" size="sm" onClick={confirmDelete} disabled={deleting}>
-                {deleting ? "Deleting…" : "Delete"}
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={cancelDelete} disabled={deleting}>
-                Cancel
-              </Button>
-            </div>
-            {deleteError && <p className="text-xs text-destructive">{deleteError}</p>}
+          <CardContent>
+            <TaskDeleteConfirm title={task.title} deleting={deleting} error={error} onConfirm={confirm} onCancel={cancel} />
           </CardContent>
         </Card>
       </li>
@@ -327,42 +308,17 @@ function TaskRow({
               <Badge variant={PRIORITY_BADGE_VARIANT[task.priority]}>{PRIORITY_LABEL[task.priority]}</Badge>
               {task.assigneeName && <span>Assigned to {task.assigneeName}</span>}
             </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <TaskDetailsSheet
-                task={task}
-                cachedTask={cachedTask}
-                fetchTask={fetchTask}
-                trigger={
-                  <Button type="button" size="icon-xs" variant="ghost" aria-label="View task details">
-                    <Eye className="size-3.5" aria-hidden="true" />
-                  </Button>
-                }
-              />
-              <EditTaskSheet
-                task={task}
-                cachedTask={cachedTask}
-                fetchTask={fetchTask}
-                onUpdate={onUpdate}
-                members={members}
-                membersLoading={membersLoading}
-                membersError={membersError}
-                onRetryMembers={onRetryMembers}
-                trigger={
-                  <Button type="button" size="icon-xs" variant="ghost" aria-label="Edit task">
-                    <Pencil className="size-3.5" aria-hidden="true" />
-                  </Button>
-                }
-              />
-              <Button
-                type="button"
-                size="icon-xs"
-                variant="ghost"
-                onClick={startConfirmingDelete}
-                aria-label="Delete task"
-              >
-                <Trash2 className="size-3.5" aria-hidden="true" />
-              </Button>
-            </div>
+            <TaskCardActions
+              task={task}
+              cachedTask={cachedTask}
+              fetchTask={fetchTask}
+              onUpdate={onUpdate}
+              members={members}
+              membersLoading={membersLoading}
+              membersError={membersError}
+              onRetryMembers={onRetryMembers}
+              onDeleteClick={start}
+            />
           </div>
         </CardContent>
       </Card>
