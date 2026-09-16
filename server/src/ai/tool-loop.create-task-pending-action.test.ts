@@ -32,14 +32,13 @@ const getTasksTool = {
   handler: async () => [{ title: "Task 1" }],
 };
 
-// Phase 19 Step 4: verifies the smallest backend-only type extension to
-// tool-loop.ts's executeToolCall (the { result, pendingAction } split,
-// mirroring searchDocuments' existing { result, sources } split) - NOT the
-// SSE emission of a pending_action event, which is explicitly out of scope
-// for this step and does not exist yet. This test only proves the
-// model-facing tool_result content never contains the richer
-// pendingAction payload.
-test("runChatTurn: createTask's model-facing tool_result never contains pendingAction fields; other tools are unaffected", async (t) => {
+// Phase 19 Step 4 originally verified the { result, pendingAction } split
+// on ToolExecutionResult with no SSE wiring yet. Step 7B-0 wires that split
+// into a real `pending_action` TurnEvent - this test is updated to assert
+// the now-correct end state: the richer pendingAction payload appears ONLY
+// in its own dedicated event, never inside the model-facing tool_result
+// content.
+test("runChatTurn: createTask's model-facing tool_result never contains pendingAction fields, which instead appear only in a dedicated pending_action event; other tools are unaffected", async (t) => {
   const { provider } = makeScriptedProvider((callIndex) => {
     if (callIndex === 0) {
       return [
@@ -66,19 +65,28 @@ test("runChatTurn: createTask's model-facing tool_result never contains pendingA
     events.push(event);
   }
 
-  // No new SSE event type exists yet for pendingAction (that's a later
-  // Phase 19 step) - only the usual tool_call/tool_result events appear.
   assert.equal(events.filter((e) => e.type === "source").length, 0);
-  assert.ok(!events.some((e) => (e as { type: string }).type === "pending_action"));
+
+  const pendingActionEvents = events.filter((e) => e.type === "pending_action");
+  assert.equal(pendingActionEvents.length, 1, "exactly one pending_action event for the one createTask call");
+  assert.deepEqual(pendingActionEvents[0], { type: "pending_action", pendingAction: PENDING_ACTION_REF });
+
+  // getTasks (a plain read tool, unrelated to createTask) must never
+  // produce one.
+  assert.equal(
+    events.filter((e) => e.type === "tool_result" && e.name === "getTasks").length,
+    1,
+  );
 
   const createTaskResult = events.find((e) => e.type === "tool_result" && e.name === "createTask");
   assert.deepEqual(createTaskResult, { type: "tool_result", name: "createTask", ok: true });
 
-  // The pendingAction payload must never appear anywhere in the emitted
-  // event stream (it isn't wired into any event yet) - proves it truly
-  // stayed out of the model-facing path, not just absent from this one
-  // event's shape.
-  const serializedEvents = JSON.stringify(events);
-  assert.ok(!serializedEvents.includes("assigneeName"));
-  assert.ok(!serializedEvents.includes(PENDING_ACTION_REF.expiresAt));
+  // The model-facing tool_result content is still exactly the minimal ack
+  // - the richer pendingAction fields (assigneeName, expiresAt, etc.) never
+  // appear anywhere in a tool_call/tool_result event, only in the
+  // dedicated pending_action event asserted above.
+  const toolCallAndResultEvents = events.filter((e) => e.type === "tool_call" || e.type === "tool_result");
+  const serialized = JSON.stringify(toolCallAndResultEvents);
+  assert.ok(!serialized.includes("assigneeName"));
+  assert.ok(!serialized.includes(PENDING_ACTION_REF.expiresAt));
 });

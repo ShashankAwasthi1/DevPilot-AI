@@ -97,6 +97,17 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
         // content, embeddings, distance, or chunkIndex. event.sources is
         // already deduplicated and validated by extractDocumentSources.
         res.write(`event: source\ndata: ${JSON.stringify({ sources: event.sources })}\n\n`);
+      } else if (event.type === "pending_action") {
+        // Only the presentation fields a confirmation card needs -
+        // event.pendingAction is already validated by
+        // ai/tool-loop.ts's extractPendingAction, and (like every other
+        // event here) carries no projectId/userId/conversationId/authority
+        // of any kind: the frontend already has its own trusted
+        // projectId/conversationId from the page it's on, and
+        // confirming/cancelling this action is authorized fresh,
+        // server-side, by the Step 7A endpoints regardless of what this
+        // event says.
+        res.write(`event: pending_action\ndata: ${JSON.stringify(event.pendingAction)}\n\n`);
       } else if (event.type === "done") {
         finalText = event.text;
       } else if (event.type === "error") {

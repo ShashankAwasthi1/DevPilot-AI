@@ -1,4 +1,5 @@
 import { API_URL } from "./api";
+import type { TaskPriority, TaskStatus } from "./types";
 
 // Mirrors the server's TurnEvent | AgentTurnEvent union (see
 // server/src/ai/tool-loop.ts and server/src/ai/agent-runner.ts) - a single
@@ -9,11 +10,33 @@ export interface DocumentSourceRef {
   title: string;
 }
 
+// Mirrors server/src/ai/tools/create-task.tool.ts's own
+// PendingTaskActionRef exactly - the UI-facing presentation payload for an
+// AI-proposed task creation, carried by the "pending_action" SSE event
+// (server/src/ai/tool-loop.ts's extractPendingAction). Reuses the existing
+// TaskStatus/TaskPriority types rather than re-declaring the enum values a
+// second time. Deliberately contains no projectId/userId/conversationId -
+// this is display data only; confirming/cancelling is authorized fresh,
+// server-side, by the Step 7A endpoints regardless of what this object
+// says (see lib/pending-actions.ts).
+export interface PendingTaskActionRef {
+  actionId: string;
+  title: string;
+  description: string | null;
+  status: TaskStatus;
+  priority: TaskPriority;
+  assigneeId: string | null;
+  assigneeName: string | null;
+  dueDate: string | null;
+  expiresAt: string;
+}
+
 export type StreamChatEvent =
   | { type: "text"; text: string }
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
   | { type: "source"; sources: DocumentSourceRef[] }
+  | { type: "pending_action"; pendingAction: PendingTaskActionRef }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -143,6 +166,15 @@ export async function streamChatMessage(
           continue;
         }
 
+        if (parsed.event === "pending_action") {
+          if (!parsed.data) continue;
+          const pendingAction = parsePendingTaskActionRef(JSON.parse(parsed.data) as unknown);
+          if (pendingAction) {
+            onEvent({ type: "pending_action", pendingAction });
+          }
+          continue;
+        }
+
         if (parsed.data) {
           const data = JSON.parse(parsed.data) as { delta?: string };
           if (typeof data.delta === "string") {
@@ -158,6 +190,58 @@ export async function streamChatMessage(
   }
 
   onEvent({ type: "done" });
+}
+
+const TASK_STATUSES = new Set<TaskStatus>(["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE"]);
+const TASK_PRIORITIES = new Set<TaskPriority>(["LOW", "MEDIUM", "HIGH", "URGENT"]);
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isStringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+// Defensive shape/enum validation for one parsed "pending_action" JSON
+// body - same posture as the "source" event's own inline filter just
+// below: never pass an arbitrary server payload straight into UI state.
+// Returns null (never throws) for anything missing a required field or
+// carrying an unrecognized status/priority value, so a malformed frame is
+// silently dropped rather than crashing the stream - a JSON syntax error
+// in the frame itself still bubbles to this function's caller's own
+// try/catch, exactly like every other event type here.
+function parsePendingTaskActionRef(data: unknown): PendingTaskActionRef | null {
+  if (typeof data !== "object" || data === null) return null;
+  const value = data as Record<string, unknown>;
+
+  if (
+    !isNonEmptyString(value.actionId) ||
+    !isNonEmptyString(value.title) ||
+    !isNonEmptyString(value.expiresAt) ||
+    typeof value.status !== "string" ||
+    !TASK_STATUSES.has(value.status as TaskStatus) ||
+    typeof value.priority !== "string" ||
+    !TASK_PRIORITIES.has(value.priority as TaskPriority) ||
+    !isStringOrNull(value.description ?? null) ||
+    !isStringOrNull(value.assigneeId ?? null) ||
+    !isStringOrNull(value.assigneeName ?? null) ||
+    !isStringOrNull(value.dueDate ?? null)
+  ) {
+    return null;
+  }
+
+  return {
+    actionId: value.actionId,
+    title: value.title,
+    description: (value.description as string | null | undefined) ?? null,
+    status: value.status as TaskStatus,
+    priority: value.priority as TaskPriority,
+    assigneeId: (value.assigneeId as string | null | undefined) ?? null,
+    assigneeName: (value.assigneeName as string | null | undefined) ?? null,
+    dueDate: (value.dueDate as string | null | undefined) ?? null,
+    expiresAt: value.expiresAt,
+  };
 }
 
 function parseSseFrame(frame: string): { event: string; data: string } | null {

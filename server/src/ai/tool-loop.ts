@@ -20,6 +20,7 @@ export type TurnEvent =
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
   | { type: "source"; sources: DocumentSourceRef[] }
+  | { type: "pending_action"; pendingAction: PendingTaskActionRef }
   | { type: "done"; text: string };
 
 // Computed once, not per round - the tool set is fixed and small. Exported
@@ -164,6 +165,50 @@ export function extractDocumentSources(
     }
   }
   return sources;
+}
+
+// The shared helper both runChatTurn and (once wired - see agent-runner.ts's
+// own note) an agent turn would call to decide whether to emit a
+// `pending_action` event after a tool call - mirrors
+// extractDocumentSources exactly, including its defensive-validation
+// posture: even though this data was only just constructed by our own
+// create-task.tool.ts a moment ago, it is never forwarded to the SSE
+// stream without re-checking the fields the frontend actually depends on
+// (actionId/title/expiresAt) are present and non-empty. Contains no
+// projectId/userId/conversationId/authority of any kind - purely display
+// data; confirming/cancelling is authorized fresh, server-side, by the
+// Step 7A endpoints regardless of what this event says.
+export function extractPendingAction(
+  tool: ToolDefinition<any> | undefined,
+  executionResult: ToolExecutionResult,
+): PendingTaskActionRef | null {
+  if (tool?.name !== "createTask" || !executionResult.ok || !executionResult.pendingAction) {
+    return null;
+  }
+
+  const pa = executionResult.pendingAction;
+  if (
+    typeof pa.actionId !== "string" ||
+    pa.actionId.length === 0 ||
+    typeof pa.title !== "string" ||
+    pa.title.length === 0 ||
+    typeof pa.expiresAt !== "string" ||
+    pa.expiresAt.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    actionId: pa.actionId,
+    title: pa.title,
+    description: pa.description ?? null,
+    status: pa.status,
+    priority: pa.priority,
+    assigneeId: pa.assigneeId ?? null,
+    assigneeName: pa.assigneeName ?? null,
+    dueDate: pa.dueDate ?? null,
+    expiresAt: pa.expiresAt,
+  };
 }
 
 // Never blindly slices a serialized JSON string - that can cut mid-object
@@ -328,6 +373,15 @@ export async function* runChatTurn(params: RunChatTurnParams): AsyncGenerator<Tu
       const sources = extractDocumentSources(tool, executionResult);
       if (sources.length > 0) {
         yield { type: "source", sources };
+      }
+
+      // Same "only on success, never empty" rule as sources above. Does
+      // not create a second PendingTaskAction row or change anything about
+      // create-task.tool.ts's own proposal semantics - this only surfaces,
+      // over SSE, the row that tool already created.
+      const pendingAction = extractPendingAction(tool, executionResult);
+      if (pendingAction) {
+        yield { type: "pending_action", pendingAction };
       }
     }
 
