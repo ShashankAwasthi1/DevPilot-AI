@@ -224,26 +224,28 @@ export function useChatTurn({ projectId, conversationId }: UseChatTurnOptions): 
   async function confirmAction(actionId: string): Promise<void> {
     if (isActionBusy(actionStatesRef.current[actionId])) return;
 
-    setActionState(actionId, { status: "confirming" });
+    setActionState(actionId, { status: "confirming", lastAction: "confirm" });
     try {
       const task = await confirmPendingTaskAction(projectId, conversationId, actionId);
-      setActionState(actionId, { status: "confirmed", task });
+      setActionState(actionId, { status: "confirmed", lastAction: "confirm", task });
     } catch (err) {
       // Never an unhandled rejection: the error is caught here and turned
       // into state a future UI can render (and retry from), not rethrown.
-      setActionState(actionId, { status: "error", error: toSafeActionErrorMessage(err) });
+      // lastAction is preserved as "confirm" so a Retry action knows which
+      // operation to repeat.
+      setActionState(actionId, { status: "error", lastAction: "confirm", error: toSafeActionErrorMessage(err) });
     }
   }
 
   async function cancelAction(actionId: string): Promise<void> {
     if (isActionBusy(actionStatesRef.current[actionId])) return;
 
-    setActionState(actionId, { status: "cancelling" });
+    setActionState(actionId, { status: "cancelling", lastAction: "cancel" });
     try {
       await cancelPendingTaskAction(projectId, conversationId, actionId);
-      setActionState(actionId, { status: "cancelled" });
+      setActionState(actionId, { status: "cancelled", lastAction: "cancel" });
     } catch (err) {
-      setActionState(actionId, { status: "error", error: toSafeActionErrorMessage(err) });
+      setActionState(actionId, { status: "error", lastAction: "cancel", error: toSafeActionErrorMessage(err) });
     }
   }
 

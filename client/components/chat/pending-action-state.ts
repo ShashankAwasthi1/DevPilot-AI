@@ -9,6 +9,12 @@ export type PendingActionStatus = "pending" | "confirming" | "cancelling" | "con
 
 export interface PendingActionState {
   status: PendingActionStatus;
+  // Which operation this status came from - set whenever confirmAction/
+  // cancelAction starts, and preserved through to "error" so a Retry
+  // action can repeat the same operation instead of guessing (Phase 19
+  // Step 7B-3). Not meaningful before either has ever been called (the
+  // initial "pending" state has no lastAction).
+  lastAction?: "confirm" | "cancel";
   // Populated only after a successful confirm - the future UI can use this
   // to show what was actually created without a second fetch.
   task?: import("@/lib/types").Task;

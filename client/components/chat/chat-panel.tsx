@@ -8,6 +8,7 @@ import { useApiData } from "@/lib/use-api-data";
 import { ChatInput } from "./chat-input";
 import { MessageBubble } from "./message-bubble";
 import { ModeToggle, type ChatMode } from "./mode-toggle";
+import { PendingActionCard } from "./pending-action-card";
 import { SourceFooter } from "./source-footer";
 import { ToolActivity } from "./tool-activity";
 import { useChatTurn, type LocalMessage } from "./use-chat-turn";
@@ -33,7 +34,15 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
   const [mode, setMode] = useState<ChatMode>("chat");
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const { messages: localMessages, streaming, sendMessage, stop } = useChatTurn({
+  const {
+    messages: localMessages,
+    streaming,
+    sendMessage,
+    stop,
+    actionStates,
+    confirmAction,
+    cancelAction,
+  } = useChatTurn({
     projectId,
     conversationId,
   });
@@ -83,6 +92,14 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
               <ToolActivity items={message.toolActivity} />
             )}
             <MessageBubble role={message.role} content={message.content} />
+            {message.role === "ASSISTANT" && message.pendingAction && (
+              <PendingActionCard
+                action={message.pendingAction}
+                state={actionStates[message.pendingAction.actionId] ?? { status: "pending" }}
+                onConfirm={confirmAction}
+                onCancel={cancelAction}
+              />
+            )}
             {message.sources && message.sources.length > 0 && <SourceFooter sources={message.sources} />}
             {message.failed && (
               <p className="mt-1 text-right text-xs text-destructive">
