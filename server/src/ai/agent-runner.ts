@@ -5,10 +5,12 @@ import {
   buildAssistantBlocks,
   executeToolCall,
   extractDocumentSources,
+  extractPendingAction,
   findTool,
   buildToolResultBlock,
   type DocumentSourceRef,
 } from "./tool-loop";
+import type { PendingTaskActionRef } from "./tools/create-task.tool";
 import type { ToolContext } from "./tools/types";
 import type { ProviderContentBlock, ProviderMessage } from "./provider";
 
@@ -50,6 +52,7 @@ export type AgentTurnEvent =
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
   | { type: "source"; sources: DocumentSourceRef[] }
+  | { type: "pending_action"; pendingAction: PendingTaskActionRef }
   | { type: "done"; text: string }
   | { type: "error"; reason: AgentErrorReason };
 
@@ -213,6 +216,17 @@ export async function* runAgentTurn(params: RunAgentTurnParams): AsyncGenerator<
         const sources = extractDocumentSources(tool, executionResult);
         if (sources.length > 0) {
           yield { type: "source", sources };
+        }
+
+        // Same "only on success, never empty" rule as sources above, via
+        // the exact same shared helper runChatTurn uses - no duplicated
+        // extraction logic. Does not create a second PendingTaskAction row
+        // or change anything about create-task.tool.ts's own proposal
+        // semantics; this only surfaces, over SSE, the row that tool
+        // already created.
+        const pendingAction = extractPendingAction(tool, executionResult);
+        if (pendingAction) {
+          yield { type: "pending_action", pendingAction };
         }
       }
 
