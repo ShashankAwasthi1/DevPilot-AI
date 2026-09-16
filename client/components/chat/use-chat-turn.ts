@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { streamChatMessage, type StreamChatEvent } from "@/lib/ai-chat";
+import { streamChatMessage, type PendingTaskActionRef, type StreamChatEvent } from "@/lib/ai-chat";
+import { cancelPendingTaskAction, confirmPendingTaskAction } from "@/lib/pending-actions";
 import type { ChatMessageRole } from "@/lib/types";
+import { isActionBusy, toSafeActionErrorMessage, type PendingActionStateMap } from "./pending-action-state";
 import type { ChatMode } from "./mode-toggle";
 import type { SourceRef } from "./source-footer";
 import type { ToolActivityItem } from "./tool-activity";
@@ -21,6 +23,15 @@ export interface LocalMessage {
   // toolActivity above: scoped per-message, never inferred from the
   // message's own text, and only ever populated from "source" SSE events.
   sources?: SourceRef[];
+  // The AI-proposed task creation surfaced during this turn (Phase 19), if
+  // any - the immutable proposal payload from the server. Same
+  // per-message scoping as toolActivity/sources above: only ever set on
+  // the assistant message that produced it, via a "pending_action" SSE
+  // event, and untouched by "done" so it survives after the stream ends.
+  // Loading/confirmed/cancelled/error state for it is tracked separately
+  // in actionStates below, keyed by actionId - this field itself never
+  // mutates once set.
+  pendingAction?: PendingTaskActionRef;
 }
 
 interface UseChatTurnOptions {
@@ -33,6 +44,13 @@ interface UseChatTurnResult {
   streaming: boolean;
   sendMessage: (content: string, mode: ChatMode) => void;
   stop: () => void;
+  // Keyed by PendingTaskActionRef.actionId - deliberately separate from
+  // `messages[].pendingAction` (the immutable proposal payload) so a
+  // future UI can render loading/confirmed/cancelled/error state without
+  // that state ever touching the proposal data itself.
+  actionStates: PendingActionStateMap;
+  confirmAction: (actionId: string) => Promise<void>;
+  cancelAction: (actionId: string) => Promise<void>;
 }
 
 export function useChatTurn({ projectId, conversationId }: UseChatTurnOptions): UseChatTurnResult {
@@ -48,6 +66,18 @@ export function useChatTurn({ projectId, conversationId }: UseChatTurnOptions): 
   // so handleStop can update that specific message's tool activity without
   // handleSend needing to lift assistantMessageId into component state.
   const currentAssistantIdRef = useRef<string | null>(null);
+  const [actionStates, setActionStates] = useState<PendingActionStateMap>({});
+  // Mirrors actionStates synchronously (state updates from setState are not
+  // visible until the next render) so confirmAction/cancelAction can check
+  // "is a request already in flight for this action" at call time, not at
+  // last-render time - this is what actually prevents a duplicate
+  // confirm/cancel firing from two fast clicks.
+  const actionStatesRef = useRef<PendingActionStateMap>({});
+
+  function setActionState(actionId: string, state: PendingActionStateMap[string]) {
+    actionStatesRef.current = { ...actionStatesRef.current, [actionId]: state };
+    setActionStates(actionStatesRef.current);
+  }
 
   useEffect(() => {
     return () => abortRef.current?.abort();
@@ -120,6 +150,19 @@ export function useChatTurn({ projectId, conversationId }: UseChatTurnOptions): 
             return { ...message, sources: [...existing, ...additions] };
           }),
         );
+      } else if (event.type === "pending_action") {
+        // Attaches to the CURRENT assistant message only - assistantMessageId
+        // is fixed for this whole closure/turn (see handleSend above), so
+        // this can never land on an older assistant message or the user
+        // message, and since that message was already created synchronously
+        // when the turn started, there is no "doesn't exist yet" case to
+        // handle here.
+        setLocalMessages((prev) =>
+          prev.map((message) =>
+            message.id === assistantMessageId ? { ...message, pendingAction: event.pendingAction } : message,
+          ),
+        );
+        setActionState(event.pendingAction.actionId, { status: "pending" });
       } else if (event.type === "done") {
         setStreaming(false);
         abortRef.current = null;
@@ -173,10 +216,44 @@ export function useChatTurn({ projectId, conversationId }: UseChatTurnOptions): 
     );
   }
 
+  // Confirmation and cancellation are mutually exclusive per action and
+  // each is guarded against a duplicate in-flight request for the same
+  // actionId - isActionBusy checks actionStatesRef (see setActionState
+  // above), not React state, so two rapid calls both see the first one's
+  // "confirming"/"cancelling" write immediately rather than racing.
+  async function confirmAction(actionId: string): Promise<void> {
+    if (isActionBusy(actionStatesRef.current[actionId])) return;
+
+    setActionState(actionId, { status: "confirming" });
+    try {
+      const task = await confirmPendingTaskAction(projectId, conversationId, actionId);
+      setActionState(actionId, { status: "confirmed", task });
+    } catch (err) {
+      // Never an unhandled rejection: the error is caught here and turned
+      // into state a future UI can render (and retry from), not rethrown.
+      setActionState(actionId, { status: "error", error: toSafeActionErrorMessage(err) });
+    }
+  }
+
+  async function cancelAction(actionId: string): Promise<void> {
+    if (isActionBusy(actionStatesRef.current[actionId])) return;
+
+    setActionState(actionId, { status: "cancelling" });
+    try {
+      await cancelPendingTaskAction(projectId, conversationId, actionId);
+      setActionState(actionId, { status: "cancelled" });
+    } catch (err) {
+      setActionState(actionId, { status: "error", error: toSafeActionErrorMessage(err) });
+    }
+  }
+
   return {
     messages: localMessages,
     streaming,
     sendMessage: handleSend,
     stop: handleStop,
+    actionStates,
+    confirmAction,
+    cancelAction,
   };
 }
