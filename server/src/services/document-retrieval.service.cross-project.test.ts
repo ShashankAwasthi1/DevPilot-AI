@@ -13,8 +13,8 @@ test("cross-project isolation: each call's SQL is scoped to exactly the projectI
     namedExports: {
       getEmbeddingProvider: () => ({
         name: "fake",
-        dimensions: 1536,
-        embed: async () => [Array.from({ length: 1536 }, () => 0.1)],
+        dimensions: 384,
+        embed: async () => [Array.from({ length: 384 }, () => 0.1)],
       }),
     },
   });

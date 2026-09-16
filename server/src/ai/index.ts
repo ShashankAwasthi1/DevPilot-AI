@@ -1,6 +1,7 @@
 import { getAIConfig } from "../config/ai";
 import { AnthropicProvider } from "./providers/anthropic.provider";
-import { OpenAIEmbeddingProvider } from "./openai-embedding-provider";
+import { GeminiProvider } from "./providers/gemini.provider";
+import { LocalEmbeddingProvider } from "./local-embedding-provider";
 import type { AIProvider } from "./provider";
 import type { EmbeddingProvider } from "./embedding-provider";
 
@@ -14,18 +15,24 @@ export function getAIProvider(): AIProvider {
   switch (config.provider) {
     case "anthropic":
       return new AnthropicProvider();
+    case "gemini":
+      return new GeminiProvider();
     default:
-      throw new Error(`Unknown AI_PROVIDER: ${config.provider}`);
+      // Unreachable: getAIConfig() only ever returns "anthropic" or
+      // "gemini" (or throws for anything else) - kept as a defensive,
+      // exhaustiveness-checked fallback rather than an assumption.
+      throw new Error("Unknown AI_PROVIDER");
   }
 }
 
 // The single place that decides which concrete provider backs the
 // EmbeddingProvider interface - the same role as getAIProvider above, for
-// a deliberately separate capability (embeddings, not generation). Only
-// one implementation exists today; this is still the seam a second one
-// would plug into later, without touching any caller.
+// a deliberately separate capability (embeddings, not generation). Runs
+// fully locally (no API key, no paid usage) so RAG works out of the box;
+// this is still the seam a second implementation would plug into later,
+// without touching any caller.
 export function getEmbeddingProvider(): EmbeddingProvider {
-  return new OpenAIEmbeddingProvider();
+  return new LocalEmbeddingProvider();
 }
 
 export type {

@@ -254,12 +254,16 @@ model Message {
 // so retrieval can filter/authorize directly on this table without a join,
 // and so the vector index's filtered scans stay fast.
 //
-// The `embedding` column itself (vector(1536), NOT NULL, plus its HNSW
+// The `embedding` column itself (vector(384), NOT NULL, plus its HNSW
 // index) is added via hand-written SQL in this model's migration, not
 // through this schema - Prisma's `Unsupported` type is excluded from the
 // generated Client entirely, and there is no Prisma DSL for pgvector's
 // HNSW/cosine operator class. All reads/writes to `embedding` go through
 // $queryRaw/$executeRaw in the service layer (Phase 14, later steps).
+// Dimension is 384 to match the local embedding model
+// (Xenova/all-MiniLM-L6-v2, see ../src/ai/local-embedding-provider.ts) -
+// originally 1536 for OpenAI's text-embedding-3-small, changed by the
+// pgvector-384 migration when embeddings moved local-only.
 model DocumentChunk {
   id         String   @id @default(cuid())
   documentId String
@@ -271,7 +275,7 @@ model DocumentChunk {
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
 
-  embedding Unsupported("vector(1536)")
+  embedding Unsupported("vector(384)")
 
   @@index([documentId, chunkIndex])
   @@index([projectId])

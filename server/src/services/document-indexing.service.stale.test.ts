@@ -46,8 +46,8 @@ test("indexDocument: discards a stale indexing run if the document changed while
     namedExports: {
       getEmbeddingProvider: () => ({
         name: "fake",
-        dimensions: 1536,
-        embed: async (texts: string[]) => texts.map(() => Array.from({ length: 1536 }, () => 1)),
+        dimensions: 384,
+        embed: async (texts: string[]) => texts.map(() => Array.from({ length: 384 }, () => 1)),
       }),
     },
   });

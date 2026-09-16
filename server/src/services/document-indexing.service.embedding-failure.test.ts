@@ -30,7 +30,7 @@ test("indexDocument: an embedding provider failure never touches the database - 
     namedExports: {
       getEmbeddingProvider: () => ({
         name: "fake",
-        dimensions: 1536,
+        dimensions: 384,
         embed: async () => {
           throw new Error("embedding provider unavailable (simulated)");
         },

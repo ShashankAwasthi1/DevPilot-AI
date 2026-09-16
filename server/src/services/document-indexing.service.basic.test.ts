@@ -56,10 +56,10 @@ test("indexDocument: chunks content, embeds all chunks, and stores matching chun
     namedExports: {
       getEmbeddingProvider: () => ({
         name: "fake",
-        dimensions: 1536,
+        dimensions: 384,
         embed: async (texts: string[]) => {
           embedCalledWith.push(texts);
-          return texts.map((_, i) => Array.from({ length: 1536 }, () => i + 1));
+          return texts.map((_, i) => Array.from({ length: 384 }, () => i + 1));
         },
       }),
     },

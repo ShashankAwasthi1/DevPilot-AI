@@ -6,7 +6,7 @@ test("retrieval: embeds the query, filters/limits correctly, uses parameterized 
   let capturedStrings: TemplateStringsArray | undefined;
   let capturedValues: unknown[] = [];
 
-  const fakeEmbedding = Array.from({ length: 1536 }, (_, i) => (i === 0 ? 0.5 : 0));
+  const fakeEmbedding = Array.from({ length: 384 }, (_, i) => (i === 0 ? 0.5 : 0));
 
   t.mock.module("./project.service", {
     namedExports: {
@@ -17,7 +17,7 @@ test("retrieval: embeds the query, filters/limits correctly, uses parameterized 
     namedExports: {
       getEmbeddingProvider: () => ({
         name: "fake",
-        dimensions: 1536,
+        dimensions: 384,
         embed: async (texts: string[]) => {
           embedCalledWith = texts;
           return [fakeEmbedding];

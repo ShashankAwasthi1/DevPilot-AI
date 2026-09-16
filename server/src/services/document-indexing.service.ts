@@ -7,17 +7,17 @@ import { prisma } from "../config/prisma";
 // Same PrismaClientOrTx pattern as activity.service.ts/notification.service.ts.
 type PrismaClientOrTx = typeof prisma | Prisma.TransactionClient;
 
-// The DocumentChunk.embedding column is a fixed vector(1536) (see the Step
-// 1 migration) - independent of whatever an EmbeddingProvider happens to
-// report, this is checked explicitly below so a future provider swap with
-// a mismatched dimension fails loudly here rather than corrupting the
-// column at insert time.
-const EMBEDDING_DIMENSIONS = 1536;
+// The DocumentChunk.embedding column is a fixed vector(384) (see the
+// pgvector-384 migration) - independent of whatever an EmbeddingProvider
+// happens to report, this is checked explicitly below so a future
+// provider swap with a mismatched dimension fails loudly here rather than
+// corrupting the column at insert time.
+const EMBEDDING_DIMENSIONS = 384;
 
-// OpenAI's embeddings endpoint accepts a batched array in one request, but
-// sending a full document's worth of chunks (up to MAX_CHUNKS_PER_DOCUMENT)
-// in a single call is unnecessary risk - one large request is an
-// all-or-nothing failure. A small, fixed batch size keeps each request
+// The local embedding model accepts a batched array in one call, but
+// running a full document's worth of chunks (up to MAX_CHUNKS_PER_DOCUMENT)
+// through the model in a single call is unnecessary risk - one large batch
+// is an all-or-nothing failure. A small, fixed batch size keeps each call
 // modest without building a general-purpose queue; not a general
 // batching system, just a loop.
 const EMBEDDING_BATCH_SIZE = 20;
@@ -25,10 +25,10 @@ const EMBEDDING_BATCH_SIZE = 20;
 // Chunk content is passed to the embedding provider as-is, even though an
 // overlap-seeded chunk from chunkDocument() (Step 2) can occasionally
 // exceed MAX_CHUNK_CHARS by up to CHUNK_OVERLAP_CHARS - reviewed and
-// accepted: the worst case (~1352 characters) is still far under any
-// embedding provider's per-input token limit (OpenAI's is 8191 tokens,
-// roughly 4 characters/token for English text), so no chunking change was
-// needed for this step.
+// accepted: the worst case (~1352 characters) is still far under the
+// local model's 256-token input window in token count for typical English
+// text, and transformers.js truncates rather than throwing on overlong
+// input, so no chunking change was needed for this step.
 
 // Idempotent: re-running this with unchanged document content always
 // converges to the same final chunk rows (delete-then-insert). Safe
@@ -74,7 +74,7 @@ export async function indexDocument(documentId: string): Promise<void> {
 
     await tx.documentChunk.deleteMany({ where: { documentId } });
 
-    // Prisma's Unsupported("vector(1536)") column is excluded from the
+    // Prisma's Unsupported("vector(384)") column is excluded from the
     // generated Client entirely - every write here is raw, parameterized
     // SQL. The id column has no database-level default (Prisma's
     // @default(cuid()) is applied client-side, not via a SQL DEFAULT

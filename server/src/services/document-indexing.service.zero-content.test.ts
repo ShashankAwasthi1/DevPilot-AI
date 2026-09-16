@@ -31,7 +31,7 @@ test("indexDocument: zero-chunk (empty) content deletes existing chunks and neve
     namedExports: {
       getEmbeddingProvider: () => ({
         name: "fake",
-        dimensions: 1536,
+        dimensions: 384,
         embed: async () => {
           embedCalled = true;
           return [];

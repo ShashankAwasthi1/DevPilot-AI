@@ -16,7 +16,7 @@ test("unauthorized project access is rejected before any embedding/query cost is
     namedExports: {
       getEmbeddingProvider: () => ({
         name: "fake",
-        dimensions: 1536,
+        dimensions: 384,
         embed: async () => {
           embedCalled = true;
           return [];
