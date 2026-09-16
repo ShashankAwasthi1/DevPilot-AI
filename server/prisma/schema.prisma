@@ -51,6 +51,23 @@ enum MessageRole {
   ASSISTANT
 }
 
+// Phase 19: lifecycle of an AI-proposed task creation. A row only ever
+// moves PENDING -> CONFIRMED or PENDING -> CANCELLED, both via a single
+// atomic conditional update (WHERE status = PENDING) at confirm/cancel
+// time - that update's affected-row-count is the entire idempotency/
+// replay-prevention mechanism, so no other status transition is valid.
+// EXPIRED is not currently written by anything (expiry is checked lazily
+// against expiresAt at confirm time, see the Phase 19 Step 3 design) -
+// kept as a distinct value now so a future cleanup job can mark stale
+// PENDING rows without a schema change, rather than inventing a meaning
+// for it later.
+enum PendingTaskActionStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  EXPIRED
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -70,6 +87,7 @@ model User {
   notifications Notification[]
   documents     Document[]
   conversations Conversation[]
+  pendingTaskActions PendingTaskAction[]
 
   @@map("users")
 }
@@ -103,6 +121,7 @@ model Project {
   activities    Activity[]
   documents     Document[]
   conversations Conversation[]
+  pendingTaskActions PendingTaskAction[]
 
   @@index([ownerId])
   @@map("projects")
@@ -229,6 +248,7 @@ model Conversation {
   project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   messages Message[]
+  pendingTaskActions PendingTaskAction[]
 
   @@index([projectId, userId, createdAt, id])
   @@map("conversations")
@@ -245,6 +265,39 @@ model Message {
 
   @@index([conversationId, createdAt, id])
   @@map("messages")
+}
+
+// Phase 19: an AI-proposed createTask action awaiting explicit user
+// confirmation. The AI tool that creates this row NEVER writes to `tasks`
+// itself (see server/src/ai/tools/create-task.tool.ts) - only a
+// separately-authenticated confirm endpoint (a later Phase 19 step) may
+// call task.service.ts's own createTask() using `proposedInput` verbatim.
+// `proposedInput` stores exactly the Zod-validated tool input (never
+// re-editable at confirm time - see the Phase 19 Step 3 design's
+// "Prevents modifying the proposed payload" requirement). `projectId`/
+// `userId` are always the values from the AI tool's server-side
+// ToolContext, never anything the model or a client could supply.
+model PendingTaskAction {
+  id             String                  @id @default(cuid())
+  conversationId String
+  projectId      String
+  userId         String
+  proposedInput  Json
+  status         PendingTaskActionStatus @default(PENDING)
+  resultTaskId   String?
+  resultError    String?
+  createdAt      DateTime                @default(now())
+  expiresAt      DateTime
+  confirmedAt    DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, projectId])
+  @@index([conversationId])
+  @@index([status, expiresAt])
+  @@map("pending_task_actions")
 }
 
 // Phase 14: chunks of a Document's content, each with an embedding vector

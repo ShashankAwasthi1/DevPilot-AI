@@ -2,6 +2,7 @@ import { z } from "zod";
 import { getAIProvider } from "./index";
 import { AI_LIMITS } from "./limits";
 import { TOOLS } from "./tools";
+import type { PendingTaskActionRef } from "./tools/create-task.tool";
 import type { ToolContext, ToolDefinition } from "./tools/types";
 import type { ProviderContentBlock, ProviderMessage, ProviderToolSpec } from "./provider";
 
@@ -55,7 +56,7 @@ export function parseToolArgs(tool: ToolDefinition<any>, input: unknown): unknow
 }
 
 export type ToolExecutionResult =
-  | { ok: true; result: unknown; sources?: DocumentSourceRef[] }
+  | { ok: true; result: unknown; sources?: DocumentSourceRef[]; pendingAction?: PendingTaskActionRef }
   | { ok: false };
 
 // searchDocuments is the one tool whose handler returns both the minimal,
@@ -80,6 +81,27 @@ function isSearchDocumentsHandlerResult(value: unknown): value is SearchDocument
   );
 }
 
+// createTask (Phase 19) is the second tool whose handler returns both a
+// minimal, model-facing result AND a separate, richer record for
+// non-model use - here, the proposed task's full details for the (not yet
+// implemented) frontend confirmation card, kept out of the model-facing
+// tool_result content exactly like searchDocuments' sources above.
+// Recognized by name, not duck-typed, for the same reason.
+interface CreateTaskHandlerResult {
+  result: unknown;
+  pendingAction: PendingTaskActionRef;
+}
+
+function isCreateTaskHandlerResult(value: unknown): value is CreateTaskHandlerResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "result" in value &&
+    "pendingAction" in value &&
+    typeof (value as { pendingAction: unknown }).pendingAction === "object"
+  );
+}
+
 // Executes ONE already-selected tool call: unknown tool, malformed
 // arguments, and any handler failure (including an access-check AppError)
 // all collapse to the same safe, non-throwing `{ ok: false }` outcome -
@@ -99,6 +121,10 @@ export async function executeToolCall(
 
     if (tool.name === "searchDocuments" && isSearchDocumentsHandlerResult(raw)) {
       return { ok: true, result: raw.result, sources: raw.sources };
+    }
+
+    if (tool.name === "createTask" && isCreateTaskHandlerResult(raw)) {
+      return { ok: true, result: raw.result, pendingAction: raw.pendingAction };
     }
 
     return { ok: true, result: raw };

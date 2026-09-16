@@ -113,7 +113,7 @@ function toDueDate(value: string | null | undefined): Date | null | undefined {
 // proxy for the assignee's - always re-checked against the assignee id
 // itself, so a task can never be handed to an arbitrary user outside the
 // project.
-async function assertAssigneeIsProjectMember(projectId: string, assigneeId: string): Promise<void> {
+export async function assertAssigneeIsProjectMember(projectId: string, assigneeId: string): Promise<void> {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     select: { ownerId: true },

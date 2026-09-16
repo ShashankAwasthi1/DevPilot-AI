@@ -72,9 +72,10 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
   let agentTurnFailed = false;
 
   // toolContext is built exclusively from the authenticated userId (the
-  // session) and the URL's projectId - never from req.body, so nothing in
-  // the request payload (mode included) can influence it.
-  const toolContext = { userId, projectId };
+  // session), the URL's projectId, and the URL's conversationId - never
+  // from req.body, so nothing in the request payload (mode included) can
+  // influence it.
+  const toolContext = { userId, projectId, conversationId };
 
   try {
     const turnEvents: AsyncGenerator<TurnEvent | AgentTurnEvent> =

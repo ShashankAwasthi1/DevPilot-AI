@@ -34,6 +34,11 @@ export const AI_LIMITS = {
   // ever sent to the embedding provider.
   MAX_SEARCH_RESULTS: 5,
   MAX_SEARCH_QUERY_LENGTH: 300,
+  // Phase 19 (AI-proposed task creation) - how long a PendingTaskAction
+  // stays confirmable after the AI proposes it. Checked lazily against
+  // expiresAt at confirm time (see the Phase 19 Step 3 design); no cleanup
+  // job required for correctness.
+  PENDING_TASK_ACTION_TTL_MS: 15 * 60 * 1000,
 } as const;
 
 // Phase 15 (Controlled AI Agent) - deliberately separate from AI_LIMITS

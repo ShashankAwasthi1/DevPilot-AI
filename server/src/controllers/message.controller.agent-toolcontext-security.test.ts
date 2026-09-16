@@ -49,5 +49,5 @@ test("postMessage: agent mode's ToolContext always comes from the authenticated 
 
   await postMessage(req, res, throwingNext());
 
-  assert.deepEqual(receivedToolContext, { userId: "real-user", projectId: "real-project" });
+  assert.deepEqual(receivedToolContext, { userId: "real-user", projectId: "real-project", conversationId: "c1" });
 });
