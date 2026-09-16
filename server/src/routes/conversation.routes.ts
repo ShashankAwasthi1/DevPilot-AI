@@ -7,6 +7,10 @@ import {
   updateConversation,
 } from "../controllers/conversation.controller";
 import { postMessage } from "../controllers/message.controller";
+import {
+  cancelPendingTaskAction,
+  confirmPendingTaskAction,
+} from "../controllers/pending-task-action.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { validate } from "../middleware/validate";
 import {
@@ -37,6 +41,21 @@ router.post(
   requireAuth,
   validate(createMessageSchema),
   postMessage,
+);
+// Three ids in this path (project/conversation/action), so each segment is
+// spelled out explicitly rather than reusing the bare ":id" convention the
+// two-id routes above use - no body: projectId/conversationId come from
+// these route params, userId only from the authenticated session (see
+// pending-task-action.controller.ts).
+router.post(
+  "/:projectId/conversations/:conversationId/actions/:actionId/confirm",
+  requireAuth,
+  confirmPendingTaskAction,
+);
+router.post(
+  "/:projectId/conversations/:conversationId/actions/:actionId/cancel",
+  requireAuth,
+  cancelPendingTaskAction,
 );
 
 export default router;
