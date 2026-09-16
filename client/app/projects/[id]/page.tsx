@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import { FileText, MessageSquare, Settings, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ProjectActivity } from "@/components/projects/project-activity";
 import { CreateTaskSheet } from "@/components/tasks/create-task-sheet";
 import { TaskList } from "@/components/tasks/task-list";
 import { api } from "@/lib/api";
@@ -148,6 +149,14 @@ export default function ProjectWorkspacePage() {
           projectRole={project?.role ?? "VIEWER"}
         />
       </section>
+
+      <ProjectActivity
+        projectId={projectId}
+        members={members ?? []}
+        membersLoading={membersLoading}
+        membersError={membersError}
+        onRetryMembers={refreshMembers}
+      />
     </main>
   );
 }
