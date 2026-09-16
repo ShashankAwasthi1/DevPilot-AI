@@ -12,11 +12,13 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/format";
-import type { Task, TaskSummary } from "@/lib/types";
+import type { ProjectMember, ProjectRole, Task, TaskSummary } from "@/lib/types";
 import { PRIORITY_LABEL, STATUS_LABEL } from "./task-labels";
+import { TaskComments } from "./task-comments";
 
 interface TaskDetailsSheetProps {
   task: TaskSummary;
@@ -26,6 +28,16 @@ interface TaskDetailsSheetProps {
   cachedTask: Task | undefined;
   fetchTask: (taskId: string) => Promise<Task>;
   trigger: ReactNode;
+  // Phase 20: threaded through only so the Comments section below can
+  // resolve comment.authorId -> a display name (members) and gate its
+  // composer (projectRole) - see TaskComments. Same project-level members
+  // list already passed to every other task sheet in this codebase (see
+  // task-form-fields.tsx), never fetched again here.
+  members: ProjectMember[];
+  membersLoading: boolean;
+  membersError: ApiError | null;
+  onRetryMembers: () => void;
+  projectRole: ProjectRole;
 }
 
 // GET /tasks/:id (Phase 16 Step 9 Part 9) is now the real source of truth
@@ -34,7 +46,17 @@ interface TaskDetailsSheetProps {
 // reuses an already-cached) full Task from the server, so the sheet works
 // the same after a hard refresh, for a task created by another user, or
 // after navigating away and back.
-export function TaskDetailsSheet({ task, cachedTask, fetchTask, trigger }: TaskDetailsSheetProps) {
+export function TaskDetailsSheet({
+  task,
+  cachedTask,
+  fetchTask,
+  trigger,
+  members,
+  membersLoading,
+  membersError,
+  onRetryMembers,
+  projectRole,
+}: TaskDetailsSheetProps) {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<Task | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -134,6 +156,21 @@ export function TaskDetailsSheet({ task, cachedTask, fetchTask, trigger }: TaskD
               </div>
             </dl>
           )}
+
+          <Separator />
+
+          {/* Independent of the task-detail load above - it only needs
+              task.id (already known from the TaskSummary prop), so a slow
+              or failed task-detail fetch never blocks viewing or adding
+              comments. */}
+          <TaskComments
+            taskId={task.id}
+            projectRole={projectRole}
+            members={members}
+            membersLoading={membersLoading}
+            membersError={membersError}
+            onRetryMembers={onRetryMembers}
+          />
         </div>
       </SheetContent>
     </Sheet>

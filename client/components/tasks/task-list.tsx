@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import type { ApiError } from "@/lib/api";
 import type { UpdateTaskInput } from "@/lib/tasks";
-import type { ProjectMember, Task, TaskSummary } from "@/lib/types";
+import type { ProjectMember, ProjectRole, Task, TaskSummary } from "@/lib/types";
 import { TaskCardActions, TaskDeleteConfirm } from "./task-card-shared";
 import { TaskKanban } from "./task-kanban";
 import { TaskViewToggle, type TaskView } from "./task-view-toggle";
@@ -96,6 +96,9 @@ interface TaskListProps {
   membersLoading: boolean;
   membersError: ApiError | null;
   onRetryMembers: () => void;
+  // Phase 20: the caller's own role in this project - threaded through to
+  // TaskCardActions/TaskDetailsSheet purely for Comments composer gating.
+  projectRole: ProjectRole;
 }
 
 // Fetching/refresh/mutations live in useTasks() (consumed by the page that
@@ -116,6 +119,7 @@ export function TaskList({
   membersLoading,
   membersError,
   onRetryMembers,
+  projectRole,
 }: TaskListProps) {
   const [filters, setFilters] = useState<TaskFilterState>(DEFAULT_TASK_FILTERS);
   // Client-side UI state only - never persisted, never a URL param (the
@@ -222,6 +226,7 @@ export function TaskList({
               membersLoading={membersLoading}
               membersError={membersError}
               onRetryMembers={onRetryMembers}
+              projectRole={projectRole}
             />
           ))}
         </ul>
@@ -236,6 +241,7 @@ export function TaskList({
           membersLoading={membersLoading}
           membersError={membersError}
           onRetryMembers={onRetryMembers}
+          projectRole={projectRole}
         />
       )}
     </div>
@@ -252,6 +258,7 @@ interface TaskRowProps {
   membersLoading: boolean;
   membersError: ApiError | null;
   onRetryMembers: () => void;
+  projectRole: ProjectRole;
 }
 
 // Mirrors ConversationRow's (Phase 16 Step 8) inline confirm-swap delete
@@ -270,6 +277,7 @@ function TaskRow({
   membersLoading,
   membersError,
   onRetryMembers,
+  projectRole,
 }: TaskRowProps) {
   const { confirming, deleting, error, start, cancel, confirm } = useTaskDeleteConfirm(task.id, onDelete);
 
@@ -317,6 +325,7 @@ function TaskRow({
               membersLoading={membersLoading}
               membersError={membersError}
               onRetryMembers={onRetryMembers}
+              projectRole={projectRole}
               onDeleteClick={start}
             />
           </div>

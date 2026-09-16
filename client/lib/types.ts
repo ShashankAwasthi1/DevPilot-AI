@@ -137,3 +137,16 @@ export interface DocumentItem {
   createdAt: string;
   updatedAt: string;
 }
+
+// Mirrors server/src/services/comment.service.ts's CommentDto (Phase 20) -
+// the one shape returned by both GET and POST
+// /tasks/:taskId/comments. No projectId of its own (a comment only ever
+// belongs to a task, which is already project-scoped server-side).
+export interface TaskComment {
+  id: string;
+  taskId: string;
+  authorId: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}

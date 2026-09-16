@@ -141,6 +141,11 @@ export default function ProjectWorkspacePage() {
           membersLoading={membersLoading}
           membersError={membersError}
           onRetryMembers={refreshMembers}
+          // Fails closed to the most restrictive role while the project
+          // itself is still loading (or failed to load), so the comments
+          // composer is never shown before the caller's real role is
+          // confirmed - the server remains the actual authority regardless.
+          projectRole={project?.role ?? "VIEWER"}
         />
       </section>
     </main>

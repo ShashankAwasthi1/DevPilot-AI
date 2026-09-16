@@ -5,7 +5,7 @@ import { Eye, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ApiError } from "@/lib/api";
 import type { UpdateTaskInput } from "@/lib/tasks";
-import type { ProjectMember, Task, TaskSummary } from "@/lib/types";
+import type { ProjectMember, ProjectRole, Task, TaskSummary } from "@/lib/types";
 import { EditTaskSheet } from "./edit-task-sheet";
 import { TaskDetailsSheet } from "./task-details-sheet";
 
@@ -49,6 +49,11 @@ interface TaskCardActionsProps {
   membersLoading: boolean;
   membersError: ApiError | null;
   onRetryMembers: () => void;
+  // Phase 20: the caller's own role in this project - threaded through
+  // only so TaskDetailsSheet's Comments section can gate its composer
+  // (VIEWER never sees it). UI gating only; the server remains the sole
+  // authority.
+  projectRole: ProjectRole;
   onDeleteClick: (event: MouseEvent) => void;
 }
 
@@ -64,6 +69,7 @@ export function TaskCardActions({
   membersLoading,
   membersError,
   onRetryMembers,
+  projectRole,
   onDeleteClick,
 }: TaskCardActionsProps) {
   return (
@@ -72,6 +78,11 @@ export function TaskCardActions({
         task={task}
         cachedTask={cachedTask}
         fetchTask={fetchTask}
+        members={members}
+        membersLoading={membersLoading}
+        membersError={membersError}
+        onRetryMembers={onRetryMembers}
+        projectRole={projectRole}
         trigger={
           <Button type="button" size="icon-xs" variant="ghost" aria-label="View task details">
             <Eye className="size-3.5" aria-hidden="true" />

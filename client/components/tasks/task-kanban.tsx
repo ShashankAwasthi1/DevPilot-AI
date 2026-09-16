@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { ApiError } from "@/lib/api";
 import type { UpdateTaskInput } from "@/lib/tasks";
-import type { ProjectMember, Task, TaskStatus, TaskSummary } from "@/lib/types";
+import type { ProjectMember, ProjectRole, Task, TaskStatus, TaskSummary } from "@/lib/types";
 import { TaskCardActions, TaskDeleteConfirm } from "./task-card-shared";
 import { PRIORITY_BADGE_VARIANT, PRIORITY_LABEL, STATUS_LABEL } from "./task-labels";
 import { useTaskDeleteConfirm } from "./use-task-delete-confirm";
@@ -29,6 +29,7 @@ interface TaskKanbanProps {
   membersLoading: boolean;
   membersError: ApiError | null;
   onRetryMembers: () => void;
+  projectRole: ProjectRole;
 }
 
 // Four-column board over the exact same task collection task-list.tsx's
@@ -47,6 +48,7 @@ export function TaskKanban({
   membersLoading,
   membersError,
   onRetryMembers,
+  projectRole,
 }: TaskKanbanProps) {
   return (
     <div className="flex gap-3 overflow-x-auto pb-2 lg:grid lg:grid-cols-4 lg:overflow-visible lg:pb-0">
@@ -81,6 +83,7 @@ export function TaskKanban({
                     membersLoading={membersLoading}
                     membersError={membersError}
                     onRetryMembers={onRetryMembers}
+                    projectRole={projectRole}
                   />
                 ))
               )}
@@ -102,6 +105,7 @@ interface TaskKanbanCardProps {
   membersLoading: boolean;
   membersError: ApiError | null;
   onRetryMembers: () => void;
+  projectRole: ProjectRole;
 }
 
 // Presentation-only in Part 11A - no drag/drop, no pointer-driven status
@@ -119,6 +123,7 @@ function TaskKanbanCard({
   membersLoading,
   membersError,
   onRetryMembers,
+  projectRole,
 }: TaskKanbanCardProps) {
   const { confirming, deleting, error, start, cancel, confirm } = useTaskDeleteConfirm(task.id, onDelete);
 
@@ -161,6 +166,7 @@ function TaskKanbanCard({
           membersLoading={membersLoading}
           membersError={membersError}
           onRetryMembers={onRetryMembers}
+          projectRole={projectRole}
           onDeleteClick={start}
         />
       </CardContent>
