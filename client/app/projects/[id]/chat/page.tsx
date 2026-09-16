@@ -1,8 +1,8 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { ChatPanel } from "@/components/chat/chat-panel";
 import { ConversationList } from "@/components/chat/conversation-list";
@@ -12,8 +12,12 @@ import { api, ApiError } from "@/lib/api";
 import { useApiData } from "@/lib/use-api-data";
 import type { ConversationSummary, SafeUser } from "@/lib/types";
 
-export default function ProjectChatPage(props: PageProps<"/projects/[id]/chat">) {
-  const { id: projectId } = use(props.params);
+export default function ProjectChatPage() {
+  // useParams() rather than use(props.params) - client-safe and never
+  // suspends, unlike unwrapping a Promise-based params prop mid client-side
+  // transition (the cause of the "Open chat" navigation hang from a
+  // sibling dynamic-segment page).
+  const projectId = useParams<{ id: string }>().id;
   const router = useRouter();
 
   const { data: user, loading: authLoading, error: authError } = useApiData(

@@ -1,9 +1,9 @@
 "use client";
 
-import { use, useEffect } from "react";
+import { useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { MessageSquare, Settings, Users } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { FileText, MessageSquare, Settings, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreateTaskSheet } from "@/components/tasks/create-task-sheet";
@@ -19,8 +19,12 @@ import type { ProjectSummary, SafeUser } from "@/lib/types";
 // reachable via the "Open chat" link below. Auth/redirect handling
 // mirrors chat/page.tsx exactly (same useApiData("/auth/me") + redirect
 // pattern), since this page needs the identical guard.
-export default function ProjectWorkspacePage(props: PageProps<"/projects/[id]">) {
-  const { id: projectId } = use(props.params);
+export default function ProjectWorkspacePage() {
+  // useParams() rather than use(props.params) - client-safe and never
+  // suspends, unlike unwrapping a Promise-based params prop mid client-side
+  // transition (the cause of the "Open chat" navigation hang between this
+  // page and its sibling chat page).
+  const projectId = useParams<{ id: string }>().id;
   const router = useRouter();
 
   const { data: user, loading: authLoading, error: authError } = useApiData(
@@ -83,6 +87,12 @@ export default function ProjectWorkspacePage(props: PageProps<"/projects/[id]">)
           <p className="text-sm text-muted-foreground">Tasks</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" className="w-fit gap-1.5" asChild>
+            <Link href={`/projects/${projectId}/docs`}>
+              <FileText className="size-4" aria-hidden="true" />
+              Docs
+            </Link>
+          </Button>
           <Button variant="outline" className="w-fit gap-1.5" asChild>
             <Link href={`/projects/${projectId}/members`}>
               <Users className="size-4" aria-hidden="true" />
