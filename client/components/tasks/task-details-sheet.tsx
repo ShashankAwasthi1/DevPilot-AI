@@ -18,6 +18,7 @@ import { ApiError } from "@/lib/api";
 import { formatRelativeTime } from "@/lib/format";
 import type { ProjectMember, ProjectRole, Task, TaskSummary } from "@/lib/types";
 import { PRIORITY_LABEL, STATUS_LABEL } from "./task-labels";
+import { TaskActivity } from "./task-activity";
 import { TaskComments } from "./task-comments";
 
 interface TaskDetailsSheetProps {
@@ -171,6 +172,25 @@ export function TaskDetailsSheet({
             membersError={membersError}
             onRetryMembers={onRetryMembers}
           />
+
+          <Separator />
+
+          {/* Unlike Comments above, this needs a projectId - the one
+              already available on the fetched full Task detail (`detail`),
+              never a new prop threaded through every task list/card
+              component just for this. It only renders once that detail has
+              loaded (Activity has nothing to show without a projectId to
+              fetch with, same as the existing dl block just above it). */}
+          {detail && (
+            <TaskActivity
+              projectId={detail.projectId}
+              taskId={task.id}
+              members={members}
+              membersLoading={membersLoading}
+              membersError={membersError}
+              onRetryMembers={onRetryMembers}
+            />
+          )}
         </div>
       </SheetContent>
     </Sheet>
