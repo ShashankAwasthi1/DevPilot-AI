@@ -2,17 +2,24 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Plus } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { SafeUser } from "@/lib/types";
+import type { ProjectSummary, SafeUser } from "@/lib/types";
+import { CreateProjectDialog } from "./create-project-dialog";
 
 function initials(user: SafeUser): string {
   const source = user.name?.trim() || user.email;
   return source.slice(0, 2).toUpperCase();
 }
 
-export function DashboardHeader({ user }: { user: SafeUser }) {
+interface DashboardHeaderProps {
+  user: SafeUser;
+  onProjectCreated: (project: ProjectSummary) => void;
+}
+
+export function DashboardHeader({ user, onProjectCreated }: DashboardHeaderProps) {
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -39,9 +46,20 @@ export function DashboardHeader({ user }: { user: SafeUser }) {
           <p className="text-sm text-muted-foreground">{user.email}</p>
         </div>
       </div>
-      <Button variant="outline" onClick={handleLogout} disabled={loggingOut}>
-        {loggingOut ? "Signing out…" : "Sign out"}
-      </Button>
+      <div className="flex items-center gap-2">
+        <CreateProjectDialog
+          onCreated={onProjectCreated}
+          trigger={
+            <Button type="button" className="gap-1.5">
+              <Plus className="size-4" aria-hidden="true" />
+              Create Project
+            </Button>
+          }
+        />
+        <Button variant="outline" onClick={handleLogout} disabled={loggingOut}>
+          {loggingOut ? "Signing out…" : "Sign out"}
+        </Button>
+      </div>
     </header>
   );
 }
