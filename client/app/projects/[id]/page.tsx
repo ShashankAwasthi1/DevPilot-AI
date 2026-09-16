@@ -3,7 +3,7 @@
 import { use, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { MessageSquare, Users } from "lucide-react";
+import { MessageSquare, Settings, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreateTaskSheet } from "@/components/tasks/create-task-sheet";
@@ -87,6 +87,12 @@ export default function ProjectWorkspacePage(props: PageProps<"/projects/[id]">)
             <Link href={`/projects/${projectId}/members`}>
               <Users className="size-4" aria-hidden="true" />
               Members
+            </Link>
+          </Button>
+          <Button variant="outline" className="w-fit gap-1.5" asChild>
+            <Link href={`/projects/${projectId}/settings`}>
+              <Settings className="size-4" aria-hidden="true" />
+              Settings
             </Link>
           </Button>
           <Button variant="outline" className="w-fit gap-1.5" asChild>
