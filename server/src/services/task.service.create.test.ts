@@ -9,6 +9,7 @@ const MEMBER_ID = "member-1";
 const OUTSIDER_ID = "outsider-1";
 
 const createCalls: { data: Record<string, unknown> }[] = [];
+const notificationCalls: { userId: string; type: string; metadata: Record<string, unknown> }[] = [];
 let projectAccessRole: string = "OWNER";
 let getProjectAccessCalls = 0;
 
@@ -60,6 +61,16 @@ test("createTask: an OWNER can create a task, and projectId/createdById come fro
               createdAt: new Date("2026-01-01T00:00:00.000Z"),
               updatedAt: new Date("2026-01-01T00:00:00.000Z"),
             };
+          },
+        },
+        // Real createNotification (./notification.service is never mocked
+        // in this file) writes through this - only a plain capturing stub,
+        // since these tests care about *whether/who* a notification fires
+        // for, not persistence details.
+        notification: {
+          create: async (args: { data: { userId: string; type: string; metadata: Record<string, unknown> } }) => {
+            notificationCalls.push(args.data);
+            return { id: "notification-1", ...args.data, readAt: null, createdAt: new Date() };
           },
         },
       },
@@ -234,4 +245,55 @@ test("createTask: calls getProjectAccess before ever attempting to write", async
   await createTask(REAL_USER_ID, REAL_PROJECT_ID, { title: "Task", status: "TODO", priority: "MEDIUM" });
 
   assert.ok(getProjectAccessCalls > before, "getProjectAccess must be called");
+});
+
+test("createTask: creating a task assigned to another user sends that user a TASK_ASSIGNED notification", async () => {
+  const { createTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  const before = notificationCalls.length;
+
+  const result = await createTask(REAL_USER_ID, REAL_PROJECT_ID, {
+    title: "Task",
+    status: "TODO",
+    priority: "MEDIUM",
+    assigneeId: MEMBER_ID,
+  });
+
+  assert.equal(notificationCalls.length, before + 1);
+  const notification = notificationCalls[notificationCalls.length - 1];
+  assert.equal(notification.userId, MEMBER_ID);
+  assert.equal(notification.type, "TASK_ASSIGNED");
+  assert.deepEqual(notification.metadata, {
+    taskId: result.id,
+    projectId: REAL_PROJECT_ID,
+    actorId: REAL_USER_ID,
+  });
+});
+
+test("createTask: assigning a task to yourself never sends a notification", async () => {
+  const { createTask } = await import("./task.service");
+  projectAccessRole = "MEMBER";
+  const before = notificationCalls.length;
+
+  // MEMBER_ID is both the caller and the assignee here - a real
+  // self-assignment, not just "some user assigns to some other user who
+  // happens to share an id".
+  await createTask(MEMBER_ID, REAL_PROJECT_ID, {
+    title: "Task",
+    status: "TODO",
+    priority: "MEDIUM",
+    assigneeId: MEMBER_ID,
+  });
+
+  assert.equal(notificationCalls.length, before, "self-assignment must never trigger a notification");
+});
+
+test("createTask: creating an unassigned task never sends a notification", async () => {
+  const { createTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  const before = notificationCalls.length;
+
+  await createTask(REAL_USER_ID, REAL_PROJECT_ID, { title: "Task", status: "TODO", priority: "MEDIUM" });
+
+  assert.equal(notificationCalls.length, before, "no assignee means no notification");
 });

@@ -1,6 +1,7 @@
 import { Task, TaskPriority, TaskStatus } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
+import { createNotification } from "./notification.service";
 import { assertRole, getProjectAccess, ProjectRole } from "./project.service";
 import type { CreateTaskInput, UpdateTaskInput } from "../validation/task.validation";
 
@@ -164,6 +165,17 @@ export async function createTask(
     },
   });
 
+  // Notify the assignee, if any - but never notify someone of their own
+  // self-assignment. Same guard comment.service.ts's createComment already
+  // uses for its own assignee notification.
+  if (task.assigneeId && task.assigneeId !== userId) {
+    await createNotification(prisma, {
+      userId: task.assigneeId,
+      type: "TASK_ASSIGNED",
+      metadata: { taskId: task.id, projectId, actorId: userId },
+    });
+  }
+
   return toTaskDto(task);
 }
 
@@ -212,6 +224,27 @@ export async function updateTask(
       dueDate: toDueDate(input.dueDate),
     },
   });
+
+  // Notify the new assignee only when this update actually changes who is
+  // assigned, to someone other than the caller. `input.assigneeId` is
+  // `undefined` when this field isn't part of the update at all (see the
+  // comment above toDueDate for the same undefined-vs-null distinction),
+  // so an update that never touches assigneeId never reaches here; and
+  // resending the same assigneeId (a no-op change) is caught by comparing
+  // against the pre-update `task.assigneeId` resolved by getTaskAccess
+  // above - never a duplicate notification for an unchanged assignee.
+  if (
+    input.assigneeId !== undefined &&
+    input.assigneeId !== null &&
+    input.assigneeId !== task.assigneeId &&
+    input.assigneeId !== userId
+  ) {
+    await createNotification(prisma, {
+      userId: input.assigneeId,
+      type: "TASK_ASSIGNED",
+      metadata: { taskId: task.id, projectId, actorId: userId },
+    });
+  }
 
   return toTaskDto(updated);
 }

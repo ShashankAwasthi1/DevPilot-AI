@@ -7,10 +7,17 @@ const REAL_TASK_ID = "task-1";
 const REAL_USER_ID = "user-1";
 const OWNER_ID = "owner-1";
 const MEMBER_ID = "member-1";
+const MEMBER_2_ID = "member-2";
 const OUTSIDER_ID = "outsider-1";
 
 const updateCalls: { where: unknown; data: Record<string, unknown> }[] = [];
+const notificationCalls: { userId: string; type: string; metadata: Record<string, unknown> }[] = [];
 let projectAccessRole: string = "OWNER";
+// The pre-update task's assigneeId, as returned by getTaskAccess's own
+// prisma.task.findUnique lookup - mutable per test (like projectAccessRole
+// above) so the assignee-change tests can control what "the current
+// assignee before this update" was.
+let existingAssigneeId: string | null = null;
 
 function baseTaskRow() {
   return {
@@ -20,7 +27,7 @@ function baseTaskRow() {
     description: "Original description",
     status: "TODO",
     priority: "MEDIUM",
-    assigneeId: null,
+    assigneeId: existingAssigneeId,
     createdById: OWNER_ID,
     dueDate: null,
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -60,10 +67,19 @@ test("updateTask: an OWNER can update, and only the supplied fields are ever wri
         },
         projectMember: {
           findUnique: async ({ where }: { where: { projectId_userId: { projectId: string; userId: string } } }) => {
-            if (where.projectId_userId.userId === MEMBER_ID) {
-              return { id: "membership-1", projectId: REAL_PROJECT_ID, userId: MEMBER_ID, role: "MEMBER" };
+            const memberUserId = where.projectId_userId.userId;
+            if (memberUserId === MEMBER_ID || memberUserId === MEMBER_2_ID) {
+              return { id: "membership-1", projectId: REAL_PROJECT_ID, userId: memberUserId, role: "MEMBER" };
             }
             return null;
+          },
+        },
+        // Real createNotification (./notification.service is never mocked
+        // in this file) writes through this - only a plain capturing stub.
+        notification: {
+          create: async (args: { data: { userId: string; type: string; metadata: Record<string, unknown> } }) => {
+            notificationCalls.push(args.data);
+            return { id: "notification-1", ...args.data, readAt: null, createdAt: new Date() };
           },
         },
       },
@@ -232,4 +248,58 @@ test("updateTask: a nonexistent task id is rejected with the existing 404 behavi
   );
 
   assert.equal(updateCalls.length, before);
+});
+
+test("updateTask: changing the assignee from one user to another sends the new assignee a TASK_ASSIGNED notification", async () => {
+  const { updateTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  existingAssigneeId = MEMBER_ID; // "A"
+  const before = notificationCalls.length;
+
+  await updateTask(REAL_USER_ID, REAL_TASK_ID, { assigneeId: MEMBER_2_ID }); // -> "B"
+
+  assert.equal(notificationCalls.length, before + 1);
+  const notification = notificationCalls[notificationCalls.length - 1];
+  assert.equal(notification.userId, MEMBER_2_ID, "only the new assignee (B) is notified, never the old one (A)");
+  assert.equal(notification.type, "TASK_ASSIGNED");
+  assert.deepEqual(notification.metadata, {
+    taskId: REAL_TASK_ID,
+    projectId: REAL_PROJECT_ID,
+    actorId: REAL_USER_ID,
+  });
+});
+
+test("updateTask: resending the same assigneeId (no actual change) never sends a duplicate notification", async () => {
+  const { updateTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  existingAssigneeId = MEMBER_ID;
+  const before = notificationCalls.length;
+
+  await updateTask(REAL_USER_ID, REAL_TASK_ID, { assigneeId: MEMBER_ID });
+
+  assert.equal(notificationCalls.length, before, "an unchanged assigneeId must never trigger a notification");
+});
+
+test("updateTask: updating other fields without touching assigneeId never sends a notification", async () => {
+  const { updateTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  existingAssigneeId = MEMBER_ID;
+  const before = notificationCalls.length;
+
+  await updateTask(REAL_USER_ID, REAL_TASK_ID, { title: "Renamed once more" });
+
+  assert.equal(notificationCalls.length, before, "assigneeId omitted entirely must never trigger a notification");
+});
+
+test("updateTask: assigning to yourself never sends a notification", async () => {
+  const { updateTask } = await import("./task.service");
+  projectAccessRole = "MEMBER";
+  existingAssigneeId = MEMBER_2_ID;
+  const before = notificationCalls.length;
+
+  // MEMBER_ID is both the caller and the new assignee - a real
+  // self-assignment during an update, not just a coincidental id match.
+  await updateTask(MEMBER_ID, REAL_TASK_ID, { assigneeId: MEMBER_ID });
+
+  assert.equal(notificationCalls.length, before, "self-assignment must never trigger a notification");
 });

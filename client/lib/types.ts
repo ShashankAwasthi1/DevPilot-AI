@@ -24,7 +24,9 @@ export interface ProjectSummary {
 }
 
 // Mirrors server/src/services/notification.service.ts's NotificationDto.
-export type NotificationType = "TASK_COMMENT_CREATED";
+// TASK_ASSIGNED (Phase 22) is created by task.service.ts's createTask/
+// updateTask when a task's assignee changes to a different user.
+export type NotificationType = "TASK_COMMENT_CREATED" | "TASK_ASSIGNED";
 
 export interface NotificationItem {
   id: string;

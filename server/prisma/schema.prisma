@@ -44,6 +44,7 @@ enum ActivityType {
 
 enum NotificationType {
   TASK_COMMENT_CREATED
+  TASK_ASSIGNED
 }
 
 enum MessageRole {
