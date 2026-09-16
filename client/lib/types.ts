@@ -122,3 +122,18 @@ export interface ProjectMember {
   email: string;
   role: ProjectRole;
 }
+
+// Mirrors server/src/services/document.service.ts's DocumentDto - the one
+// shape returned by every document endpoint (list/search/get/create/
+// update/archive all return this same full DTO, unlike tasks' separate
+// summary/full split), so there is no smaller "DocumentSummary" type.
+export interface DocumentItem {
+  id: string;
+  projectId: string;
+  authorId: string;
+  title: string;
+  content: string;
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
