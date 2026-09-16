@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamChatMessage, type PendingTaskActionRef, type StreamChatEvent } from "@/lib/ai-chat";
+import { streamChatMessage, type PendingActionRef, type StreamChatEvent } from "@/lib/ai-chat";
 import { cancelPendingTaskAction, confirmPendingTaskAction } from "@/lib/pending-actions";
 import type { ChatMessageRole } from "@/lib/types";
 import { isActionBusy, toSafeActionErrorMessage, type PendingActionStateMap } from "./pending-action-state";
@@ -31,7 +31,7 @@ export interface LocalMessage {
   // Loading/confirmed/cancelled/error state for it is tracked separately
   // in actionStates below, keyed by actionId - this field itself never
   // mutates once set.
-  pendingAction?: PendingTaskActionRef;
+  pendingAction?: PendingActionRef;
 }
 
 interface UseChatTurnOptions {

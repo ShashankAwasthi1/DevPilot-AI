@@ -3,8 +3,16 @@ import { getAIProvider } from "./index";
 import { AI_LIMITS } from "./limits";
 import { TOOLS } from "./tools";
 import type { PendingTaskActionRef } from "./tools/create-task.tool";
+import type { FieldChange, UpdateTaskPendingActionRef } from "./tools/update-task.tool";
 import type { ToolContext, ToolDefinition } from "./tools/types";
 import type { ProviderContentBlock, ProviderMessage, ProviderToolSpec } from "./provider";
+
+// Phase 24: the two proposal shapes a "pending_action" event can ever
+// carry, discriminated by actionType - createTask's own ref (Phase 19) is
+// unchanged in shape apart from gaining that discriminator; updateTask's
+// ref (Phase 24) is new. Both are built exclusively from server-resolved
+// data (the tool's own DB reads), never from anything else the model said.
+export type PendingActionRef = PendingTaskActionRef | UpdateTaskPendingActionRef;
 
 // Structured RAG citation metadata (Phase 16 Step 5) - only ever populated
 // from searchDocuments' own already-authorized retrieval result (see
@@ -20,7 +28,7 @@ export type TurnEvent =
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
   | { type: "source"; sources: DocumentSourceRef[] }
-  | { type: "pending_action"; pendingAction: PendingTaskActionRef }
+  | { type: "pending_action"; pendingAction: PendingActionRef }
   | { type: "done"; text: string };
 
 // Computed once, not per round - the tool set is fixed and small. Exported
@@ -57,7 +65,7 @@ export function parseToolArgs(tool: ToolDefinition<any>, input: unknown): unknow
 }
 
 export type ToolExecutionResult =
-  | { ok: true; result: unknown; sources?: DocumentSourceRef[]; pendingAction?: PendingTaskActionRef }
+  | { ok: true; result: unknown; sources?: DocumentSourceRef[]; pendingAction?: PendingActionRef }
   | { ok: false };
 
 // searchDocuments is the one tool whose handler returns both the minimal,
@@ -103,6 +111,24 @@ function isCreateTaskHandlerResult(value: unknown): value is CreateTaskHandlerRe
   );
 }
 
+// updateTask (Phase 24) is the third tool with this same "minimal
+// model-facing result plus a richer, UI-only record" split - same
+// recognized-by-name rule as createTask/searchDocuments above.
+interface UpdateTaskHandlerResult {
+  result: unknown;
+  pendingAction: UpdateTaskPendingActionRef;
+}
+
+function isUpdateTaskHandlerResult(value: unknown): value is UpdateTaskHandlerResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "result" in value &&
+    "pendingAction" in value &&
+    typeof (value as { pendingAction: unknown }).pendingAction === "object"
+  );
+}
+
 // Executes ONE already-selected tool call: unknown tool, malformed
 // arguments, and any handler failure (including an access-check AppError)
 // all collapse to the same safe, non-throwing `{ ok: false }` outcome -
@@ -125,6 +151,10 @@ export async function executeToolCall(
     }
 
     if (tool.name === "createTask" && isCreateTaskHandlerResult(raw)) {
+      return { ok: true, result: raw.result, pendingAction: raw.pendingAction };
+    }
+
+    if (tool.name === "updateTask" && isUpdateTaskHandlerResult(raw)) {
       return { ok: true, result: raw.result, pendingAction: raw.pendingAction };
     }
 
@@ -167,48 +197,109 @@ export function extractDocumentSources(
   return sources;
 }
 
-// The shared helper both runChatTurn and (once wired - see agent-runner.ts's
-// own note) an agent turn would call to decide whether to emit a
-// `pending_action` event after a tool call - mirrors
-// extractDocumentSources exactly, including its defensive-validation
-// posture: even though this data was only just constructed by our own
-// create-task.tool.ts a moment ago, it is never forwarded to the SSE
-// stream without re-checking the fields the frontend actually depends on
-// (actionId/title/expiresAt) are present and non-empty. Contains no
+// A field-change entry is only ever trusted if it names one of the known
+// update fields and its from/to values are each a plain string or null -
+// never re-serialized model prose, never anything else. Used below to
+// filter update-task.tool.ts's own already-server-built `changes` array
+// defensively, the same posture every other field in this function
+// applies to a createTask proposal.
+const VALID_CHANGE_FIELDS = new Set<string>(["title", "description", "status", "priority", "assigneeId", "dueDate"]);
+
+function isValidFieldChange(value: unknown): value is FieldChange {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.field === "string" &&
+    VALID_CHANGE_FIELDS.has(entry.field) &&
+    (entry.from === null || typeof entry.from === "string") &&
+    (entry.to === null || typeof entry.to === "string")
+  );
+}
+
+// The shared helper both runChatTurn and agent-runner.ts call to decide
+// whether (and what) to emit as a `pending_action` event after a tool
+// call - mirrors extractDocumentSources exactly, including its
+// defensive-validation posture: even though this data was only just
+// constructed by our own create-task.tool.ts/update-task.tool.ts a moment
+// ago, it is never forwarded to the SSE stream without re-checking the
+// fields the frontend actually depends on. Contains no
 // projectId/userId/conversationId/authority of any kind - purely display
 // data; confirming/cancelling is authorized fresh, server-side, by the
-// Step 7A endpoints regardless of what this event says.
+// existing confirm/cancel endpoints regardless of what this event says.
+// Discriminates on `tool.name`, not on the shape of `pendingAction` -
+// same "recognized by name, not duck-typed" rule as executeToolCall above.
 export function extractPendingAction(
   tool: ToolDefinition<any> | undefined,
   executionResult: ToolExecutionResult,
-): PendingTaskActionRef | null {
-  if (tool?.name !== "createTask" || !executionResult.ok || !executionResult.pendingAction) {
+): PendingActionRef | null {
+  if (!executionResult.ok || !executionResult.pendingAction) {
     return null;
   }
 
-  const pa = executionResult.pendingAction;
-  if (
-    typeof pa.actionId !== "string" ||
-    pa.actionId.length === 0 ||
-    typeof pa.title !== "string" ||
-    pa.title.length === 0 ||
-    typeof pa.expiresAt !== "string" ||
-    pa.expiresAt.length === 0
-  ) {
-    return null;
+  if (tool?.name === "createTask") {
+    const pa = executionResult.pendingAction as PendingTaskActionRef;
+    if (
+      typeof pa.actionId !== "string" ||
+      pa.actionId.length === 0 ||
+      typeof pa.title !== "string" ||
+      pa.title.length === 0 ||
+      typeof pa.expiresAt !== "string" ||
+      pa.expiresAt.length === 0
+    ) {
+      return null;
+    }
+
+    return {
+      actionType: "CREATE_TASK",
+      actionId: pa.actionId,
+      title: pa.title,
+      description: pa.description ?? null,
+      status: pa.status,
+      priority: pa.priority,
+      assigneeId: pa.assigneeId ?? null,
+      assigneeName: pa.assigneeName ?? null,
+      dueDate: pa.dueDate ?? null,
+      expiresAt: pa.expiresAt,
+    };
   }
 
-  return {
-    actionId: pa.actionId,
-    title: pa.title,
-    description: pa.description ?? null,
-    status: pa.status,
-    priority: pa.priority,
-    assigneeId: pa.assigneeId ?? null,
-    assigneeName: pa.assigneeName ?? null,
-    dueDate: pa.dueDate ?? null,
-    expiresAt: pa.expiresAt,
-  };
+  if (tool?.name === "updateTask") {
+    const pa = executionResult.pendingAction as UpdateTaskPendingActionRef;
+    if (
+      typeof pa.actionId !== "string" ||
+      pa.actionId.length === 0 ||
+      typeof pa.taskId !== "string" ||
+      pa.taskId.length === 0 ||
+      typeof pa.taskTitle !== "string" ||
+      pa.taskTitle.length === 0 ||
+      typeof pa.expiresAt !== "string" ||
+      pa.expiresAt.length === 0 ||
+      !Array.isArray(pa.changes)
+    ) {
+      return null;
+    }
+
+    // Only individually well-formed entries survive - never an empty
+    // proposal (a real UpdateTaskPendingActionRef always has at least one
+    // change, per update-task.tool.ts's own no-op rejection, so an empty
+    // result here means the payload was malformed, not a legitimate
+    // zero-field update).
+    const changes = pa.changes.filter(isValidFieldChange);
+    if (changes.length === 0) {
+      return null;
+    }
+
+    return {
+      actionType: "UPDATE_TASK",
+      actionId: pa.actionId,
+      taskId: pa.taskId,
+      taskTitle: pa.taskTitle,
+      expiresAt: pa.expiresAt,
+      changes,
+    };
+  }
+
+  return null;
 }
 
 // Never blindly slices a serialized JSON string - that can cut mid-object

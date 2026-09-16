@@ -108,6 +108,79 @@ test("postMessage: a pending_action TurnEvent maps onto an `event: pending_actio
   assert.ok(toolResultIndex !== -1 && pendingActionIndex > toolResultIndex);
 });
 
+const UPDATE_PENDING_ACTION_REF = {
+  actionType: "UPDATE_TASK",
+  actionId: "action-2",
+  taskId: "task-1",
+  taskTitle: "Fix login redirect",
+  expiresAt: "2026-01-01T00:15:00.000Z",
+  changes: [{ field: "status", from: "IN_PROGRESS", to: "DONE" }],
+};
+
+test("postMessage: an UPDATE_TASK pending_action TurnEvent maps onto the exact same generic SSE frame - no separate event type, discriminated by actionType", async (t) => {
+  t.mock.module("../services/message.service", {
+    namedExports: {
+      assertConversationWritable: async () => {},
+      appendMessage: async () => ({ id: "m1" }),
+      listRecentHistory: async () => [],
+    },
+  });
+  t.mock.module("../services/ai-context.service", {
+    namedExports: {
+      buildProjectContext: async () => ({ projectName: "Demo", projectDescription: null }),
+    },
+  });
+  t.mock.module("../ai/tool-loop", {
+    namedExports: {
+      runChatTurn: () =>
+        eventsFrom([
+          { type: "text", text: "Here's a proposed change." },
+          { type: "tool_call", name: "updateTask", input: { taskId: "task-1", status: "DONE" } },
+          { type: "tool_result", name: "updateTask", ok: true },
+          { type: "pending_action", pendingAction: UPDATE_PENDING_ACTION_REF },
+          { type: "done", text: "Here's a proposed change." },
+        ]),
+    },
+  });
+  t.mock.module("../ai/agent-runner", { namedExports: { runAgentTurn: () => eventsFrom([]) } });
+
+  const { postMessage } = await importFreshController();
+
+  const { req } = makeFakeRequest({
+    projectId: "p1",
+    conversationId: "c1",
+    userId: "u1",
+    body: { content: "Mark the login redirect task as done", mode: "chat" },
+  });
+  const { res, state } = makeFakeResponse();
+
+  await postMessage(req, res, throwingNext());
+
+  const pendingActionFrame = state.writes.find((w) => w.startsWith("event: pending_action"));
+  assert.ok(pendingActionFrame, "a pending_action frame must be written");
+  assert.equal(
+    pendingActionFrame,
+    `event: pending_action\ndata: ${JSON.stringify(UPDATE_PENDING_ACTION_REF)}\n\n`,
+  );
+
+  // Never carries userId/projectId/conversationId, and never a raw
+  // snapshot - only the presentation fields extractPendingAction already
+  // validated.
+  assert.ok(!pendingActionFrame!.includes("userId"));
+  assert.ok(!pendingActionFrame!.includes("projectId"));
+  assert.ok(!pendingActionFrame!.includes("conversationId"));
+  assert.ok(!pendingActionFrame!.includes("snapshot"));
+
+  // The stream never implies the task was already updated - only that a
+  // change is proposed.
+  assert.ok(!pendingActionFrame!.includes("updated successfully"));
+
+  // Ordering matches tool-loop.ts's own yield order: tool_result -> pending_action.
+  const toolResultIndex = state.writes.findIndex((w) => w.startsWith("event: tool_result"));
+  const pendingActionIndex = state.writes.findIndex((w) => w.startsWith("event: pending_action"));
+  assert.ok(toolResultIndex !== -1 && pendingActionIndex > toolResultIndex);
+});
+
 test("postMessage: no pending_action frame is written when no pending_action event occurs", async (t) => {
   t.mock.module("../services/message.service", {
     namedExports: {

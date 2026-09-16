@@ -27,6 +27,7 @@ async function collectEvents(t: import("node:test").TestContext, sseText: string
 }
 
 const VALID_PENDING_ACTION = {
+  actionType: "CREATE_TASK",
   actionId: "action-1",
   title: "Add dark mode support",
   description: "Some detail",
@@ -38,7 +39,21 @@ const VALID_PENDING_ACTION = {
   expiresAt: "2026-01-01T00:15:00.000Z",
 };
 
-test("streamChatMessage: a valid pending_action event parses into a StreamChatEvent with the exact payload", async (t) => {
+const VALID_UPDATE_PENDING_ACTION = {
+  actionType: "UPDATE_TASK",
+  actionId: "action-2",
+  taskId: "task-1",
+  taskTitle: "Fix login redirect",
+  expiresAt: "2026-01-01T00:15:00.000Z",
+  changes: [
+    { field: "status", from: "IN_PROGRESS", to: "DONE" },
+    { field: "assigneeId", from: "user-1", to: "user-2" },
+  ],
+};
+
+// --- CREATE_TASK -----------------------------------------------------------
+
+test("streamChatMessage: a valid CREATE_TASK pending_action event parses into a StreamChatEvent with the exact payload", async (t) => {
   const sseText = `event: pending_action\ndata: ${JSON.stringify(VALID_PENDING_ACTION)}\n\nevent: done\ndata: {}\n\n`;
 
   const events = await collectEvents(t, sseText);
@@ -71,7 +86,7 @@ test("streamChatMessage: optional null fields (description/assigneeId/assigneeNa
   assert.equal(pendingActionEvent.pendingAction.dueDate, null);
 });
 
-test("streamChatMessage: a malformed pending_action event (missing actionId) is silently ignored, and the stream continues to done", async (t) => {
+test("streamChatMessage: a malformed CREATE_TASK pending_action event (missing actionId) is silently ignored, and the stream continues to done", async (t) => {
   const malformed = { ...VALID_PENDING_ACTION, actionId: undefined };
   const sseText = `event: pending_action\ndata: ${JSON.stringify(malformed)}\n\nevent: done\ndata: {}\n\n`;
 
@@ -81,9 +96,31 @@ test("streamChatMessage: a malformed pending_action event (missing actionId) is 
   assert.ok(events.some((e) => e.type === "done"), "the stream must not crash and must still reach done");
 });
 
-test("streamChatMessage: a pending_action event with an invalid status/priority enum value is silently ignored", async (t) => {
+test("streamChatMessage: a CREATE_TASK pending_action event with an invalid status/priority enum value is silently ignored", async (t) => {
   const invalidStatus = { ...VALID_PENDING_ACTION, status: "NOT_A_REAL_STATUS" };
   const sseText = `event: pending_action\ndata: ${JSON.stringify(invalidStatus)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.ok(!events.some((e) => e.type === "pending_action"));
+  assert.ok(events.some((e) => e.type === "done"));
+});
+
+// --- actionType discriminator -----------------------------------------
+
+test("streamChatMessage: a pending_action event missing actionType entirely is rejected", async (t) => {
+  const missingActionType = { ...VALID_PENDING_ACTION, actionType: undefined };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(missingActionType)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.ok(!events.some((e) => e.type === "pending_action"));
+  assert.ok(events.some((e) => e.type === "done"));
+});
+
+test("streamChatMessage: a pending_action event with an unrecognized actionType is rejected", async (t) => {
+  const invalidActionType = { ...VALID_PENDING_ACTION, actionType: "DELETE_TASK" };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(invalidActionType)}\n\nevent: done\ndata: {}\n\n`;
 
   const events = await collectEvents(t, sseText);
 
@@ -99,6 +136,133 @@ test("streamChatMessage: an empty pending_action data body is ignored safely", a
   assert.ok(!events.some((e) => e.type === "pending_action"));
   assert.ok(events.some((e) => e.type === "done"));
 });
+
+// --- UPDATE_TASK -----------------------------------------------------------
+
+test("streamChatMessage: a valid UPDATE_TASK pending_action event parses into a StreamChatEvent with the exact payload", async (t) => {
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(VALID_UPDATE_PENDING_ACTION)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  const pendingActionEvent = events.find((e) => e.type === "pending_action");
+  assert.ok(pendingActionEvent, "a pending_action event must be emitted");
+  assert.deepEqual((pendingActionEvent as { pendingAction: unknown }).pendingAction, VALID_UPDATE_PENDING_ACTION);
+});
+
+test("streamChatMessage: an UPDATE_TASK pending_action missing taskId is rejected", async (t) => {
+  const missingTaskId = { ...VALID_UPDATE_PENDING_ACTION, taskId: undefined };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(missingTaskId)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.ok(!events.some((e) => e.type === "pending_action"));
+  assert.ok(events.some((e) => e.type === "done"));
+});
+
+test("streamChatMessage: an UPDATE_TASK pending_action missing taskTitle is rejected", async (t) => {
+  const missingTaskTitle = { ...VALID_UPDATE_PENDING_ACTION, taskTitle: undefined };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(missingTaskTitle)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.ok(!events.some((e) => e.type === "pending_action"));
+  assert.ok(events.some((e) => e.type === "done"));
+});
+
+test("streamChatMessage: an UPDATE_TASK change entry naming an unknown field is dropped, valid entries survive", async (t) => {
+  const withBadField = {
+    ...VALID_UPDATE_PENDING_ACTION,
+    changes: [
+      { field: "status", from: "IN_PROGRESS", to: "DONE" },
+      { field: "notARealField", from: "x", to: "y" },
+    ],
+  };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(withBadField)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  const pendingActionEvent = events.find((e) => e.type === "pending_action") as
+    | { type: "pending_action"; pendingAction: { changes: unknown[] } }
+    | undefined;
+  assert.ok(pendingActionEvent);
+  assert.deepEqual(pendingActionEvent.pendingAction.changes, [{ field: "status", from: "IN_PROGRESS", to: "DONE" }]);
+});
+
+test("streamChatMessage: an UPDATE_TASK change entry with a non-string/non-null `from` is dropped", async (t) => {
+  const withBadFrom = {
+    ...VALID_UPDATE_PENDING_ACTION,
+    changes: [
+      { field: "status", from: "IN_PROGRESS", to: "DONE" },
+      { field: "priority", from: 123, to: "HIGH" },
+    ],
+  };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(withBadFrom)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  const pendingActionEvent = events.find((e) => e.type === "pending_action") as
+    | { type: "pending_action"; pendingAction: { changes: unknown[] } }
+    | undefined;
+  assert.ok(pendingActionEvent);
+  assert.deepEqual(pendingActionEvent.pendingAction.changes, [{ field: "status", from: "IN_PROGRESS", to: "DONE" }]);
+});
+
+test("streamChatMessage: an UPDATE_TASK change entry with a non-string/non-null `to` is dropped", async (t) => {
+  const withBadTo = {
+    ...VALID_UPDATE_PENDING_ACTION,
+    changes: [
+      { field: "status", from: "IN_PROGRESS", to: "DONE" },
+      { field: "title", from: "Old", to: 42 },
+    ],
+  };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(withBadTo)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  const pendingActionEvent = events.find((e) => e.type === "pending_action") as
+    | { type: "pending_action"; pendingAction: { changes: unknown[] } }
+    | undefined;
+  assert.ok(pendingActionEvent);
+  assert.deepEqual(pendingActionEvent.pendingAction.changes, [{ field: "status", from: "IN_PROGRESS", to: "DONE" }]);
+});
+
+test("streamChatMessage: explicit null from/to values in an UPDATE_TASK change are preserved", async (t) => {
+  const withNulls = {
+    ...VALID_UPDATE_PENDING_ACTION,
+    changes: [{ field: "assigneeId", from: "user-1", to: null }],
+  };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(withNulls)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  const pendingActionEvent = events.find((e) => e.type === "pending_action") as
+    | { type: "pending_action"; pendingAction: { changes: unknown[] } }
+    | undefined;
+  assert.ok(pendingActionEvent);
+  assert.deepEqual(pendingActionEvent.pendingAction.changes, [{ field: "assigneeId", from: "user-1", to: null }]);
+});
+
+test("streamChatMessage: an UPDATE_TASK pending_action with a malformed (non-array) changes value does not crash the stream", async (t) => {
+  const malformedChanges = { ...VALID_UPDATE_PENDING_ACTION, changes: "not-an-array" };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(malformedChanges)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.ok(!events.some((e) => e.type === "pending_action"));
+  assert.ok(events.some((e) => e.type === "done"), "the stream must not crash and must still reach done");
+});
+
+test("streamChatMessage: an UPDATE_TASK pending_action with zero valid changes is rejected as malformed", async (t) => {
+  const emptyChanges = { ...VALID_UPDATE_PENDING_ACTION, changes: [] };
+  const sseText = `event: pending_action\ndata: ${JSON.stringify(emptyChanges)}\n\nevent: done\ndata: {}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.ok(!events.some((e) => e.type === "pending_action"));
+  assert.ok(events.some((e) => e.type === "done"));
+});
+
+// --- Existing event types remain unaffected ---------------------------
 
 test("streamChatMessage: existing events (text/tool_call/tool_result/source/done) continue to parse exactly as before", async (t) => {
   const sseText = [

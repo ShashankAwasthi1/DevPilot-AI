@@ -34,6 +34,11 @@ const schema = z
 // tool_result content, the same way searchDocuments' `sources` is kept
 // out). Field list matches the Phase 19 Step 3 design exactly.
 export interface PendingTaskActionRef {
+  // Phase 24: discriminates this ref from update-task.tool.ts's own
+  // UpdateTaskPendingActionRef inside tool-loop.ts's shared PendingActionRef
+  // union - always this literal value for a create proposal, never read
+  // from anywhere else.
+  actionType: "CREATE_TASK";
   actionId: string;
   title: string;
   description: string | null;
@@ -106,6 +111,7 @@ export const createTaskTool: ToolDefinition<z.infer<typeof schema>> = {
     });
 
     const pendingActionRef: PendingTaskActionRef = {
+      actionType: "CREATE_TASK",
       actionId: pendingAction.id,
       title: proposedInput.title,
       description: proposedInput.description ?? null,

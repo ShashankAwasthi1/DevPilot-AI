@@ -4,6 +4,7 @@ import { getDocumentsTool } from "./get-documents.tool";
 import { getProjectTool } from "./get-project.tool";
 import { getTasksTool } from "./get-tasks.tool";
 import { searchDocumentsTool } from "./search-documents.tool";
+import { updateTaskTool } from "./update-task.tool";
 import type { ToolDefinition } from "./types";
 
 // The complete set of project-scoped tools available to the AI.
@@ -22,6 +23,12 @@ import type { ToolDefinition } from "./types";
 // a heterogeneous registry of independently-typed handlers - each tool's
 // own Zod schema.parse() is what actually re-validates its args at runtime
 // regardless of this array's static element type.
+// updateTask (Phase 24 Step 2) is registered here so it's discoverable and
+// independently testable, but tool-loop.ts/agent-runner.ts do not yet
+// recognize it by name the way they do createTask (that recognition, plus
+// the pendingAction/SSE bridge, is Phase 24 Step 4) - until then, a real
+// model call to this tool proposes correctly (never mutates a Task) but
+// its result is not yet surfaced as a confirmation card.
 export const TOOLS: ToolDefinition<any>[] = [
   getProjectTool,
   getTasksTool,
@@ -29,6 +36,7 @@ export const TOOLS: ToolDefinition<any>[] = [
   getActivityTool,
   searchDocumentsTool,
   createTaskTool,
+  updateTaskTool,
 ];
 
 export type { ToolContext, ToolDefinition } from "./types";

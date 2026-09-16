@@ -20,6 +20,7 @@ export interface DocumentSourceRef {
 // server-side, by the Step 7A endpoints regardless of what this object
 // says (see lib/pending-actions.ts).
 export interface PendingTaskActionRef {
+  actionType: "CREATE_TASK";
   actionId: string;
   title: string;
   description: string | null;
@@ -31,12 +32,40 @@ export interface PendingTaskActionRef {
   expiresAt: string;
 }
 
+// Phase 24: mirrors server/src/ai/tools/update-task.tool.ts's own
+// FieldChange/UpdateTaskPendingActionRef exactly. `from`/`to` are always
+// plain strings or null - a raw enum value (e.g. "DONE"), a plain id, or
+// plain text - never model-authored display prose; formatting them into
+// human-readable labels/names is this client's job (see
+// lib/pending-action-format.ts), not the server's.
+export type FieldChangeField = "title" | "description" | "status" | "priority" | "assigneeId" | "dueDate";
+
+export interface FieldChange {
+  field: FieldChangeField;
+  from: string | null;
+  to: string | null;
+}
+
+export interface UpdateTaskPendingActionRef {
+  actionType: "UPDATE_TASK";
+  actionId: string;
+  taskId: string;
+  taskTitle: string;
+  expiresAt: string;
+  changes: FieldChange[];
+}
+
+// The one payload a "pending_action" SSE event ever carries, discriminated
+// by actionType - mirrors server/src/ai/tool-loop.ts's own PendingActionRef
+// union exactly.
+export type PendingActionRef = PendingTaskActionRef | UpdateTaskPendingActionRef;
+
 export type StreamChatEvent =
   | { type: "text"; text: string }
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
   | { type: "source"; sources: DocumentSourceRef[] }
-  | { type: "pending_action"; pendingAction: PendingTaskActionRef }
+  | { type: "pending_action"; pendingAction: PendingActionRef }
   | { type: "done" }
   | { type: "error"; message: string };
 
@@ -168,7 +197,7 @@ export async function streamChatMessage(
 
         if (parsed.event === "pending_action") {
           if (!parsed.data) continue;
-          const pendingAction = parsePendingTaskActionRef(JSON.parse(parsed.data) as unknown);
+          const pendingAction = parsePendingActionRef(JSON.parse(parsed.data) as unknown);
           if (pendingAction) {
             onEvent({ type: "pending_action", pendingAction });
           }
@@ -203,18 +232,27 @@ function isStringOrNull(value: unknown): value is string | null {
   return value === null || typeof value === "string";
 }
 
-// Defensive shape/enum validation for one parsed "pending_action" JSON
-// body - same posture as the "source" event's own inline filter just
-// below: never pass an arbitrary server payload straight into UI state.
-// Returns null (never throws) for anything missing a required field or
-// carrying an unrecognized status/priority value, so a malformed frame is
-// silently dropped rather than crashing the stream - a JSON syntax error
-// in the frame itself still bubbles to this function's caller's own
-// try/catch, exactly like every other event type here.
-function parsePendingTaskActionRef(data: unknown): PendingTaskActionRef | null {
-  if (typeof data !== "object" || data === null) return null;
-  const value = data as Record<string, unknown>;
+const VALID_CHANGE_FIELDS = new Set<FieldChangeField>([
+  "title",
+  "description",
+  "status",
+  "priority",
+  "assigneeId",
+  "dueDate",
+]);
 
+function isValidFieldChange(value: unknown): value is FieldChange {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.field === "string" &&
+    VALID_CHANGE_FIELDS.has(entry.field as FieldChangeField) &&
+    isStringOrNull(entry.from) &&
+    isStringOrNull(entry.to)
+  );
+}
+
+function parseCreateTaskPendingActionRef(value: Record<string, unknown>): PendingTaskActionRef | null {
   if (
     !isNonEmptyString(value.actionId) ||
     !isNonEmptyString(value.title) ||
@@ -232,6 +270,7 @@ function parsePendingTaskActionRef(data: unknown): PendingTaskActionRef | null {
   }
 
   return {
+    actionType: "CREATE_TASK",
     actionId: value.actionId,
     title: value.title,
     description: (value.description as string | null | undefined) ?? null,
@@ -242,6 +281,55 @@ function parsePendingTaskActionRef(data: unknown): PendingTaskActionRef | null {
     dueDate: (value.dueDate as string | null | undefined) ?? null,
     expiresAt: value.expiresAt,
   };
+}
+
+// Mirrors server/src/ai/tool-loop.ts's own extractPendingAction validation
+// for an UPDATE_TASK proposal exactly: every required field must be a
+// non-empty string, `changes` must be an array, and only individually
+// well-formed entries survive - an entry naming an unrecognized field, or
+// with a non-string/non-null from/to, is dropped rather than trusted. A
+// proposal with zero valid changes left is treated as malformed (a real
+// one always has at least one, per the server's own no-op rejection).
+function parseUpdateTaskPendingActionRef(value: Record<string, unknown>): UpdateTaskPendingActionRef | null {
+  if (
+    !isNonEmptyString(value.actionId) ||
+    !isNonEmptyString(value.taskId) ||
+    !isNonEmptyString(value.taskTitle) ||
+    !isNonEmptyString(value.expiresAt) ||
+    !Array.isArray(value.changes)
+  ) {
+    return null;
+  }
+
+  const changes = value.changes.filter(isValidFieldChange);
+  if (changes.length === 0) return null;
+
+  return {
+    actionType: "UPDATE_TASK",
+    actionId: value.actionId,
+    taskId: value.taskId,
+    taskTitle: value.taskTitle,
+    expiresAt: value.expiresAt,
+    changes,
+  };
+}
+
+// Defensive shape/enum validation for one parsed "pending_action" JSON
+// body - same posture as the "source" event's own inline filter just
+// below: never pass an arbitrary server payload straight into UI state.
+// Returns null (never throws) for anything missing a required field,
+// carrying an unrecognized enum value, or naming an unrecognized
+// actionType, so a malformed frame is silently dropped rather than
+// crashing the stream - a JSON syntax error in the frame itself still
+// bubbles to this function's caller's own try/catch, exactly like every
+// other event type here.
+function parsePendingActionRef(data: unknown): PendingActionRef | null {
+  if (typeof data !== "object" || data === null) return null;
+  const value = data as Record<string, unknown>;
+
+  if (value.actionType === "CREATE_TASK") return parseCreateTaskPendingActionRef(value);
+  if (value.actionType === "UPDATE_TASK") return parseUpdateTaskPendingActionRef(value);
+  return null;
 }
 
 function parseSseFrame(frame: string): { event: string; data: string } | null {

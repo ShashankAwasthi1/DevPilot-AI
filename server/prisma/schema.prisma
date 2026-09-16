@@ -69,6 +69,16 @@ enum PendingTaskActionStatus {
   EXPIRED
 }
 
+// Phase 24: distinguishes a proposal that would create a brand-new Task
+// (no existing task to point at - PendingTaskAction.taskId is null) from
+// one that would update an existing Task (taskId is set). Defaults to
+// CREATE_TASK so every pre-Phase-24 row is unambiguously and correctly
+// backfilled by this default alone, with no separate data migration.
+enum PendingTaskActionType {
+  CREATE_TASK
+  UPDATE_TASK
+}
+
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -161,6 +171,10 @@ model Task {
   createdBy  User       @relation("TaskCreatedBy", fields: [createdById], references: [id])
   comments   Comment[]
   activities Activity[]
+  // Phase 24: only ever non-empty for an UPDATE_TASK proposal (see
+  // PendingTaskAction.taskId) - a CREATE_TASK proposal has no existing
+  // task to point at yet.
+  pendingTaskActions PendingTaskAction[]
 
   @@index([projectId, status])
   @@index([assigneeId])
@@ -283,6 +297,13 @@ model PendingTaskAction {
   conversationId String
   projectId      String
   userId         String
+  actionType     PendingTaskActionType   @default(CREATE_TASK)
+  // Only set for an UPDATE_TASK proposal - null for CREATE_TASK, since
+  // there's no existing task yet. onDelete: Cascade mirrors every other
+  // FK on this model: if the target task is deleted before an update
+  // proposal is confirmed, the proposal is deleted with it rather than
+  // left dangling.
+  taskId         String?
   proposedInput  Json
   status         PendingTaskActionStatus @default(PENDING)
   resultTaskId   String?
@@ -294,10 +315,12 @@ model PendingTaskAction {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task         Task?        @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([userId, projectId])
   @@index([conversationId])
   @@index([status, expiresAt])
+  @@index([taskId])
   @@map("pending_task_actions")
 }
 

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { makeScriptedProvider } from "./fixtures";
 
 const PENDING_ACTION_REF = {
+  actionType: "CREATE_TASK",
   actionId: "action-1",
   title: "Add dark mode support",
   description: null,

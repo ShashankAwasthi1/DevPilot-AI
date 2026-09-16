@@ -1,30 +1,51 @@
-import type { PendingTaskAction } from "@prisma/client";
+import { z } from "zod";
+import type { PendingTaskAction, PendingTaskActionType, Prisma } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { AI_LIMITS } from "../ai/limits";
 import { AppError } from "../utils/AppError";
-import { createTask as createTaskViaService, type TaskDto } from "./task.service";
-import { createTaskSchema, type CreateTaskInput } from "../validation/task.validation";
+import {
+  assertAssigneeIsProjectMember,
+  createTask as createTaskViaService,
+  getTaskAccess,
+  updateTask as updateTaskViaService,
+  type TaskDto,
+} from "./task.service";
+import { assertRole } from "./project.service";
+import { createTaskSchema, updateTaskSchema, type CreateTaskInput } from "../validation/task.validation";
 
 export interface CreatePendingTaskActionParams {
   conversationId: string;
   projectId: string;
   userId: string;
-  proposedInput: CreateTaskInput;
+  // Defaults to "CREATE_TASK" below (matching the schema's own column
+  // default) so create-task.tool.ts's existing call site - which never
+  // passes this - needs no change at all. update-task.tool.ts (Phase 24)
+  // passes "UPDATE_TASK" explicitly, alongside `taskId`.
+  actionType?: PendingTaskActionType;
+  // Only meaningful (and only ever passed) for an UPDATE_TASK proposal -
+  // there's no existing task for a CREATE_TASK proposal to point at.
+  taskId?: string;
+  // Widened from CreateTaskInput (Phase 19) to also accept an
+  // UPDATE_TASK proposal's own { changes, snapshot } shape (Phase 24) -
+  // this function has never inspected or validated the shape of this
+  // value, only persisted it verbatim (see the doc comment below), so
+  // widening it to any JSON-serializable value changes no behavior here.
+  proposedInput: CreateTaskInput | Prisma.InputJsonValue;
 }
 
-// Persists an AI-proposed task creation for later, separately-authenticated
-// confirmation (a future Phase 19 step - not implemented here). This
-// function NEVER creates a Task itself; it only records the proposal.
-// `proposedInput` must already be the tool schema's own fully-validated
-// output (.strict().parse()) before it reaches here - this function does
-// not re-validate task fields, it only persists them verbatim, since the
-// confirm step (later) must execute exactly what was proposed, never a
-// value edited in between.
+// Persists an AI-proposed task creation or update for later, separately-
+// authenticated confirmation (create: Phase 19; update: Phase 24's later
+// confirm step, not implemented here). This function NEVER mutates a Task
+// itself; it only records the proposal. `proposedInput` must already be
+// the calling tool's own fully-validated output before it reaches here -
+// this function does not re-validate its fields, it only persists them
+// verbatim, since the confirm step (later) must execute exactly what was
+// proposed, never a value edited in between.
 //
 // No authorization check lives here - role/assignee validation happens in
-// the caller (create-task.tool.ts), reusing project.service.ts's/
-// task.service.ts's existing functions, so this service has exactly one
-// job: create the row.
+// the caller (create-task.tool.ts / update-task.tool.ts), reusing
+// project.service.ts's/task.service.ts's existing functions, so this
+// service has exactly one job: create the row.
 export async function createPendingTaskAction(
   params: CreatePendingTaskActionParams,
 ): Promise<PendingTaskAction> {
@@ -33,6 +54,8 @@ export async function createPendingTaskAction(
       conversationId: params.conversationId,
       projectId: params.projectId,
       userId: params.userId,
+      actionType: params.actionType ?? "CREATE_TASK",
+      taskId: params.taskId,
       proposedInput: params.proposedInput,
       expiresAt: new Date(Date.now() + AI_LIMITS.PENDING_TASK_ACTION_TTL_MS),
     },
@@ -45,6 +68,13 @@ export async function createPendingTaskAction(
 const NOT_PENDING_MESSAGE = "This proposal is no longer pending";
 const EXPIRED_MESSAGE = "This proposal has expired";
 const NOT_FOUND_MESSAGE = "Pending action not found";
+// Phase 24: distinct from NOT_PENDING_MESSAGE on purpose - the caller who
+// actually triggers this detection gets a specific, actionable reason
+// (the task itself changed), while anyone who loses the race to that
+// same detection (or to a genuine concurrent confirm/cancel) still gets
+// the generic "no longer pending" message, since from their perspective
+// that's all that's actually true.
+const STALE_MESSAGE = "This task has changed since this proposal was made. Please ask the AI to create a new proposal.";
 
 // A stored error message is bounded the same way every other
 // user-eventually-visible error text in this codebase is (see e.g.
@@ -54,13 +84,46 @@ const NOT_FOUND_MESSAGE = "Pending action not found";
 // existing controller already returns to a client via errorHandler.ts),
 // so it's safe to store verbatim (bounded defensively anyway); anything
 // else (an unexpected non-AppError) gets a fixed generic fallback instead
-// of its own possibly-sensitive message.
+// of its own possibly-sensitive message. `fallback` defaults to the
+// original CREATE_TASK wording so that call site needs no change; the
+// UPDATE_TASK branch below passes its own.
 const RESULT_ERROR_MAX_CHARS = 500;
 
-function toSafeResultError(err: unknown): string {
-  const message = err instanceof AppError ? err.message : "Task creation failed.";
+function toSafeResultError(err: unknown, fallback = "Task creation failed."): string {
+  const message = err instanceof AppError ? err.message : fallback;
   return message.slice(0, RESULT_ERROR_MAX_CHARS);
 }
+
+// Mirrors update-task.tool.ts's own UpdateTaskProposedSnapshot shape -
+// redeclared here (not imported) since services never depend on the AI
+// tool layer, only the reverse. Re-validated the same defensive way a
+// CREATE_TASK proposal's proposedInput is re-parsed below: never trust a
+// stored JSON blob as still correctly-shaped just because it was valid
+// once at propose time.
+const updateTaskSnapshotSchema = z.object({
+  title: z.string(),
+  description: z.string().nullable(),
+  status: z.enum(["TODO", "IN_PROGRESS", "IN_REVIEW", "DONE"]),
+  priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]),
+  assigneeId: z.string().nullable(),
+  dueDate: z.string().nullable(),
+  updatedAt: z.string(),
+});
+
+// `changes` reuses the exact same schema the real, human-facing
+// PATCH /tasks/:id endpoint validates against (updateTaskSchema) - same
+// "never trust the stored blob, re-validate through the real schema"
+// discipline createTaskSchema.parse() already applies to a CREATE_TASK
+// proposal below. Unknown keys inside `changes` are silently stripped
+// (not rejected), matching updateTaskSchema's own existing convention -
+// so an unexpected persisted field can never become part of the actual
+// update passed to taskService.updateTask.
+const updateTaskProposalSchema = z.object({
+  changes: updateTaskSchema,
+  snapshot: updateTaskSnapshotSchema,
+});
+
+type UpdateTaskProposal = z.infer<typeof updateTaskProposalSchema>;
 
 // Looks up a PendingTaskAction scoped by all four identifying values at
 // once - actionId, projectId, conversationId, AND userId - so a valid
@@ -116,6 +179,15 @@ export async function confirmPendingTaskAction(
 
   if (action.expiresAt.getTime() <= Date.now()) {
     throw new AppError(409, EXPIRED_MESSAGE);
+  }
+
+  // The shared ownership/PENDING/expiry checks above apply identically to
+  // both proposal types - only what happens next (re-validation, the
+  // authorization re-check, and which service function actually mutates)
+  // differs, so it's split into its own function rather than growing this
+  // one into two interleaved code paths.
+  if (action.actionType === "UPDATE_TASK") {
+    return confirmUpdateTaskAction(action);
   }
 
   // Re-parsed through the exact same schema the real, human-facing
@@ -186,6 +258,135 @@ export async function confirmPendingTaskAction(
   }
 
   return task;
+}
+
+// Confirms an AI-proposed task UPDATE, executing it for real. Mirrors the
+// CREATE_TASK path above in every structural respect (re-validate, THEN
+// atomically claim, THEN mutate via the existing service function, never
+// prisma.task.update directly) with two differences unique to updating an
+// *existing* resource: authorization must be re-checked against the
+// task's current state (not just re-parsed from what was proposed), and a
+// proposal whose basis (the task's updatedAt) is no longer current must
+// never be silently applied.
+//
+// Ordering, and why it avoids the race the design explicitly calls out:
+//   1. re-validate the stored proposal shape (never trust it as already-safe)
+//   2. re-check authorization against LIVE data (getTaskAccess/assertRole/
+//      assertAssigneeIsProjectMember) - the proposal's own propose-time
+//      snapshot is never treated as still valid
+//   3. compare the task's CURRENT updatedAt against the snapshot captured
+//      at propose time - if it differs, atomically move PENDING -> EXPIRED
+//      (guarded exactly like the claim below) and reject, rather than
+//      leaving a proposal that can never legitimately succeed sitting in
+//      PENDING forever
+//   4. ONLY THEN attempt the atomic PENDING -> CONFIRMED claim
+//   5. ONLY IF that claim actually affected a row, call taskService.updateTask
+// The claim in step 4 - not the staleness check in step 3 - is what
+// actually prevents two concurrent confirmations from both mutating the
+// task: since status="PENDING" is a precondition of that update, only one
+// concurrent caller's updateMany can ever affect a row, regardless of
+// what each caller separately computed for staleness. The staleness check
+// exists to guard the *correctness of the value being written*, not to
+// provide mutual exclusion - that guarantee comes entirely from the claim.
+async function confirmUpdateTaskAction(action: PendingTaskAction): Promise<TaskDto> {
+  let proposal: UpdateTaskProposal;
+  try {
+    proposal = updateTaskProposalSchema.parse(action.proposedInput);
+  } catch {
+    throw new AppError(500, "Something went wrong updating the task.");
+  }
+
+  if (!action.taskId) {
+    // Defensive-only: update-task.tool.ts never creates an UPDATE_TASK row
+    // without a taskId - this can only mean a data-integrity issue, never
+    // anything a caller did.
+    throw new AppError(500, "Something went wrong updating the task.");
+  }
+
+  // Re-checked against the task's CURRENT state, never trusted from
+  // propose time: the task or the caller's project access could be gone,
+  // the caller's role could have changed, and (below) the proposed
+  // assignee could have left the project since this proposal was made.
+  // Same functions taskService.updateTask itself uses internally - reused,
+  // not reimplemented - so this is a second, harmless pass through the
+  // same authorization boundary, not a parallel one.
+  const { task, projectId, role } = await getTaskAccess(action.taskId, action.userId);
+  assertRole(role, ["OWNER", "ADMIN", "MEMBER"]);
+
+  if (proposal.changes.assigneeId) {
+    await assertAssigneeIsProjectMember(projectId, proposal.changes.assigneeId);
+  }
+
+  // Stale-proposal protection: Task.updatedAt already changes on every
+  // write (Prisma's @updatedAt) - comparing it against the snapshot
+  // captured at propose time is a free, zero-new-schema optimistic-
+  // concurrency check. If anyone (a human, or another confirmed proposal)
+  // has changed this task since the AI proposed this update, confirming
+  // now would silently apply a decision made against information that's
+  // no longer current.
+  if (task.updatedAt.getTime() !== new Date(proposal.snapshot.updatedAt).getTime()) {
+    // Never left PENDING to be retried forever - reusing the existing
+    // EXPIRED status (not inventing a new one) since its own doc comment
+    // already anticipates exactly this: marking a PENDING row stale
+    // without a schema change. Guarded by the same atomic, status-scoped
+    // updateMany as every other state transition on this model, so two
+    // concurrent stale detections (or a stale detection racing a genuine
+    // confirm/cancel) can never both "win".
+    const staleClaim = await prisma.pendingTaskAction.updateMany({
+      where: { id: action.id, status: "PENDING" },
+      data: { status: "EXPIRED" },
+    });
+
+    if (staleClaim.count > 0) {
+      throw new AppError(409, STALE_MESSAGE);
+    }
+    // Someone else already moved this action out of PENDING first (a
+    // genuine concurrent confirm/cancel, or another request's own stale
+    // detection) - from this caller's perspective it's simply no longer
+    // pending, same generic message as every other already-resolved case.
+    throw new AppError(409, NOT_PENDING_MESSAGE);
+  }
+
+  // The single atomic boundary and the entire replay/race-prevention
+  // mechanism for a genuinely-fresh proposal - identical mechanics to the
+  // CREATE_TASK claim above.
+  const claimed = await prisma.pendingTaskAction.updateMany({
+    where: { id: action.id, status: "PENDING", expiresAt: { gt: new Date() } },
+    data: { status: "CONFIRMED", confirmedAt: new Date() },
+  });
+
+  if (claimed.count === 0) {
+    throw new AppError(409, NOT_PENDING_MESSAGE);
+  }
+
+  let updatedTask: TaskDto;
+  try {
+    // Only the validated `changes` - never taskId, snapshot, actionType,
+    // or any other persisted field - and taskService.updateTask remains
+    // the one and only mutation authority. It never receives anything
+    // beyond what the model actually proposed and what re-validation
+    // above just confirmed is still safe to apply.
+    updatedTask = await updateTaskViaService(action.userId, action.taskId, proposal.changes);
+  } catch (err) {
+    // The action stays CONFIRMED - never reverted to PENDING, and this
+    // actionId can never be confirmed again (the atomic claim above has
+    // already consumed it). Same bookkeeping discipline as the CREATE_TASK
+    // failure path above, with an update-specific fallback message.
+    await prisma.pendingTaskAction
+      .update({ where: { id: action.id }, data: { resultError: toSafeResultError(err, "Task update failed.") } })
+      .catch((bookkeepingErr) => {
+        console.error(`Failed to record resultError for pending action ${action.id}:`, bookkeepingErr);
+      });
+    throw err;
+  }
+
+  try {
+    await prisma.pendingTaskAction.update({ where: { id: action.id }, data: { resultTaskId: updatedTask.id } });
+  } catch (err) {
+    console.error(`Failed to record resultTaskId for pending action ${action.id}:`, err);
+  }
+
+  return updatedTask;
 }
 
 export interface CancelPendingTaskActionResult {

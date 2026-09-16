@@ -9,8 +9,8 @@ import {
   findTool,
   buildToolResultBlock,
   type DocumentSourceRef,
+  type PendingActionRef,
 } from "./tool-loop";
-import type { PendingTaskActionRef } from "./tools/create-task.tool";
 import type { ToolContext } from "./tools/types";
 import type { ProviderContentBlock, ProviderMessage } from "./provider";
 
@@ -52,7 +52,7 @@ export type AgentTurnEvent =
   | { type: "tool_call"; name: string; input: unknown }
   | { type: "tool_result"; name: string; ok: boolean }
   | { type: "source"; sources: DocumentSourceRef[] }
-  | { type: "pending_action"; pendingAction: PendingTaskActionRef }
+  | { type: "pending_action"; pendingAction: PendingActionRef }
   | { type: "done"; text: string }
   | { type: "error"; reason: AgentErrorReason };
 

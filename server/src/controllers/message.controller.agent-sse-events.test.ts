@@ -140,3 +140,66 @@ test("postMessage: an agent-mode pending_action event maps onto the exact same `
 
   assert.ok(state.writes.includes("event: done\ndata: {}\n\n"));
 });
+
+const AGENT_UPDATE_PENDING_ACTION_REF = {
+  actionType: "UPDATE_TASK",
+  actionId: "action-2",
+  taskId: "task-1",
+  taskTitle: "Fix login redirect",
+  expiresAt: "2026-01-01T00:15:00.000Z",
+  changes: [{ field: "status", from: "IN_PROGRESS", to: "DONE" }],
+};
+
+test("postMessage: an agent-mode UPDATE_TASK pending_action event maps onto the exact same generic `event: pending_action` SSE frame as CREATE_TASK", async (t) => {
+  t.mock.module("../services/message.service", {
+    namedExports: {
+      assertConversationWritable: async () => {},
+      appendMessage: async () => ({ id: "m1" }),
+      listRecentHistory: async () => [],
+    },
+  });
+  t.mock.module("../services/ai-context.service", {
+    namedExports: {
+      buildProjectContext: async () => ({ projectName: "Demo", projectDescription: null }),
+    },
+  });
+  t.mock.module("../ai/tool-loop", { namedExports: { runChatTurn: () => eventsFrom([]) } });
+  t.mock.module("../ai/agent-runner", {
+    namedExports: {
+      runAgentTurn: () =>
+        eventsFrom([
+          { type: "text", text: "Here's a proposed change." },
+          { type: "tool_call", name: "updateTask", input: { taskId: "task-1", status: "DONE" } },
+          { type: "tool_result", name: "updateTask", ok: true },
+          { type: "pending_action", pendingAction: AGENT_UPDATE_PENDING_ACTION_REF },
+          { type: "done", text: "Here's a proposed change." },
+        ]),
+    },
+  });
+
+  const { postMessage } = await importFreshController();
+
+  const { req } = makeFakeRequest({
+    projectId: "p1",
+    conversationId: "c1",
+    userId: "u1",
+    body: { content: "Mark the login redirect task as done", mode: "agent" },
+  });
+  const { res, state } = makeFakeResponse();
+
+  await postMessage(req, res, throwingNext());
+
+  const pendingActionFrame = state.writes.find((w) => w.startsWith("event: pending_action"));
+  assert.equal(
+    pendingActionFrame,
+    `event: pending_action\ndata: ${JSON.stringify(AGENT_UPDATE_PENDING_ACTION_REF)}\n\n`,
+  );
+  assert.ok(!pendingActionFrame!.includes("snapshot"));
+  assert.ok(!pendingActionFrame!.includes("userId"));
+
+  const toolResultIndex = state.writes.findIndex((w) => w.startsWith("event: tool_result"));
+  const pendingActionIndex = state.writes.findIndex((w) => w.startsWith("event: pending_action"));
+  assert.ok(toolResultIndex !== -1 && pendingActionIndex > toolResultIndex);
+
+  assert.ok(state.writes.includes("event: done\ndata: {}\n\n"));
+});
