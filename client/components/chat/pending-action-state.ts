@@ -15,9 +15,16 @@ export interface PendingActionState {
   // Step 7B-3). Not meaningful before either has ever been called (the
   // initial "pending" state has no lastAction).
   lastAction?: "confirm" | "cancel";
-  // Populated only after a successful confirm - the future UI can use this
-  // to show what was actually created without a second fetch.
+  // Populated only after a successful CREATE_TASK/UPDATE_TASK confirm - the
+  // UI uses this to show what was actually created/updated without a
+  // second fetch.
   task?: import("@/lib/types").Task;
+  // Phase 25 Step 5: populated only after a successful CREATE_PROJECT_PLAN
+  // confirm - the created tasks, in proposal order (see
+  // lib/pending-actions.ts's ConfirmPendingActionResult). Kept separate
+  // from `task` above (never overloaded into `Task | Task[]`) so existing
+  // CREATE_TASK/UPDATE_TASK consumers of `task` are entirely unaffected.
+  tasks?: import("@/lib/types").Task[];
   // A user-safe message only (ApiError's own .message, which already
   // mirrors the server's own error envelope - see lib/api.ts). Never a raw
   // Error.message from an unexpected exception shape.

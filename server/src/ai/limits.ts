@@ -39,6 +39,13 @@ export const AI_LIMITS = {
   // expiresAt at confirm time (see the Phase 19 Step 3 design); no cleanup
   // job required for correctness.
   PENDING_TASK_ACTION_TTL_MS: 15 * 60 * 1000,
+  // Phase 25 (AI-generated project plan) - the maximum number of tasks a
+  // single generateProjectPlan proposal may contain, enforced by the
+  // tool's own Zod schema (.max()) before a PendingTaskAction row is ever
+  // created. A conservative MVP bound: large enough for a genuinely useful
+  // plan, small enough that a runaway/bulk plan can't be proposed for
+  // confirmation in one shot.
+  MAX_PLAN_TASKS: 20,
 } as const;
 
 // Phase 15 (Controlled AI Agent) - deliberately separate from AI_LIMITS

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AppError } from "../utils/AppError";
+import type { TaskDto } from "./task.service";
 
 const ACTION_ID = "action-1";
 const PROJECT_ID = "project-1";
@@ -127,7 +128,7 @@ test("confirmPendingTaskAction: success creates exactly one Task, sets CONFIRMED
   const spies = mockModules(t);
   const { confirmPendingTaskAction } = await importFreshService();
 
-  const task = await confirmPendingTaskAction(ACTION_ID, PROJECT_ID, CONVERSATION_ID, USER_ID);
+  const task = (await confirmPendingTaskAction(ACTION_ID, PROJECT_ID, CONVERSATION_ID, USER_ID)) as TaskDto;
 
   assert.equal(spies.createTaskCalls().length, 1);
   assert.deepEqual(spies.createTaskCalls()[0], [USER_ID, PROJECT_ID, BASE_PROPOSED_INPUT]);
@@ -340,7 +341,7 @@ test("confirmPendingTaskAction: repeated confirmation of the same action cannot 
   });
   const { confirmPendingTaskAction } = await importFreshService();
 
-  const first = await confirmPendingTaskAction(ACTION_ID, PROJECT_ID, CONVERSATION_ID, USER_ID);
+  const first = (await confirmPendingTaskAction(ACTION_ID, PROJECT_ID, CONVERSATION_ID, USER_ID)) as TaskDto;
   assert.equal(first.id, "task-1");
 
   await assert.rejects(

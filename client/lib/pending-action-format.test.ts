@@ -1,6 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { FIELD_LABEL, formatAssignee, formatFieldValue } from "./pending-action-format";
+import {
+  FIELD_LABEL,
+  formatAssignee,
+  formatFieldValue,
+  formatProjectPlanPriority,
+  formatProjectPlanTaskCount,
+  hasProjectPlanSummary,
+  hasProjectPlanTaskDescription,
+} from "./pending-action-format";
 import type { ProjectMember } from "./types";
 
 const MEMBERS: ProjectMember[] = [
@@ -78,4 +86,32 @@ test("formatFieldValue: assigneeId delegates to the same resolution as formatAss
 
 test("formatFieldValue: defaults to an empty member list when none is supplied", () => {
   assert.equal(formatFieldValue("assigneeId", "user-1"), "Unknown member");
+});
+
+// --- CREATE_PROJECT_PLAN formatters (Phase 25 Step 5) ---------------------
+
+test("formatProjectPlanPriority: converts every canonical priority value to its readable label", () => {
+  assert.equal(formatProjectPlanPriority("LOW"), "Low");
+  assert.equal(formatProjectPlanPriority("MEDIUM"), "Medium");
+  assert.equal(formatProjectPlanPriority("HIGH"), "High");
+  assert.equal(formatProjectPlanPriority("URGENT"), "Urgent");
+});
+
+test("formatProjectPlanTaskCount: pluralizes correctly", () => {
+  assert.equal(formatProjectPlanTaskCount(0), "0 tasks");
+  assert.equal(formatProjectPlanTaskCount(1), "1 task");
+  assert.equal(formatProjectPlanTaskCount(2), "2 tasks");
+  assert.equal(formatProjectPlanTaskCount(12), "12 tasks");
+});
+
+test("hasProjectPlanSummary: true only for a non-null, non-empty string", () => {
+  assert.equal(hasProjectPlanSummary(null), false);
+  assert.equal(hasProjectPlanSummary(""), false);
+  assert.equal(hasProjectPlanSummary("Get the SaaS MVP launched."), true);
+});
+
+test("hasProjectPlanTaskDescription: true only for a non-null, non-empty string", () => {
+  assert.equal(hasProjectPlanTaskDescription(null), false);
+  assert.equal(hasProjectPlanTaskDescription(""), false);
+  assert.equal(hasProjectPlanTaskDescription("Pass a security review before launch."), true);
 });

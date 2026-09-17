@@ -226,8 +226,15 @@ export function useChatTurn({ projectId, conversationId }: UseChatTurnOptions): 
 
     setActionState(actionId, { status: "confirming", lastAction: "confirm" });
     try {
-      const task = await confirmPendingTaskAction(projectId, conversationId, actionId);
-      setActionState(actionId, { status: "confirmed", lastAction: "confirm", task });
+      const result = await confirmPendingTaskAction(projectId, conversationId, actionId);
+      // Exactly one request was made above regardless of which branch this
+      // is (see lib/pending-actions.ts's ConfirmPendingActionResult) - this
+      // only decides which state field the single response populates.
+      if (result.kind === "tasks") {
+        setActionState(actionId, { status: "confirmed", lastAction: "confirm", tasks: result.tasks });
+      } else {
+        setActionState(actionId, { status: "confirmed", lastAction: "confirm", task: result.task });
+      }
     } catch (err) {
       // Never an unhandled rejection: the error is caught here and turned
       // into state a future UI can render (and retry from), not rethrown.

@@ -1,9 +1,16 @@
-import { Task, TaskPriority, TaskStatus } from "@prisma/client";
+import { Prisma, Task, TaskPriority, TaskStatus } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
 import { createNotification } from "./notification.service";
 import { assertRole, getProjectAccess, ProjectRole } from "./project.service";
 import type { CreateTaskInput, UpdateTaskInput } from "../validation/task.validation";
+
+// Same client-or-transaction alias notification.service.ts already
+// declares locally for createNotification - duplicated here (not
+// imported/exported) rather than shared, matching that file's own
+// precedent of keeping this a private, per-file type rather than a new
+// shared module.
+type PrismaClientOrTx = typeof prisma | Prisma.TransactionClient;
 
 export interface TaskAccess {
   task: Task;
@@ -140,10 +147,26 @@ export async function assertAssigneeIsProjectMember(projectId: string, assigneeI
 // No Activity row is written here: ActivityType has no task-created
 // variant yet, and adding one would require a schema/migration change
 // that's explicitly out of scope for this part.
+//
+// `client` (Phase 25 Step 2) defaults to the plain `prisma` singleton, so
+// every existing caller (the REST route, and the CREATE_TASK confirm
+// branch in pending-task-action.service.ts) behaves exactly as before -
+// neither passes a fourth argument. It exists so a future caller
+// confirming an AI-generated project plan can pass an open
+// `prisma.$transaction`'s `tx` instead, making several createTask calls
+// atomic (all-or-nothing) while this function remains the only code that
+// ever writes a Task - never bypassed for convenience. Authorization reads
+// (getProjectAccess/assertAssigneeIsProjectMember) intentionally stay on
+// the plain `prisma` singleton regardless of `client` - same convention
+// comment.service.ts's createComment already establishes (its own
+// getTaskAccess/assertRole run before its $transaction even opens): reads
+// that only inform a decision don't need transactional isolation, only
+// the writes below do, and only the writes ever use `client`.
 export async function createTask(
   userId: string,
   projectId: string,
   input: CreateTaskInput,
+  client: PrismaClientOrTx = prisma,
 ): Promise<TaskDto> {
   const { role } = await getProjectAccess(projectId, userId);
   assertRole(role, ["OWNER", "ADMIN", "MEMBER"]);
@@ -152,7 +175,7 @@ export async function createTask(
     await assertAssigneeIsProjectMember(projectId, input.assigneeId);
   }
 
-  const task = await prisma.task.create({
+  const task = await client.task.create({
     data: {
       projectId,
       createdById: userId,
@@ -167,9 +190,13 @@ export async function createTask(
 
   // Notify the assignee, if any - but never notify someone of their own
   // self-assignment. Same guard comment.service.ts's createComment already
-  // uses for its own assignee notification.
+  // uses for its own assignee notification. Uses the same `client` as the
+  // write above - never a different one for the same logical operation,
+  // so this either commits alongside the task (inside a transaction) or
+  // alongside nothing (the default, single-write case), never split
+  // across two different connections/clients.
   if (task.assigneeId && task.assigneeId !== userId) {
-    await createNotification(prisma, {
+    await createNotification(client, {
       userId: task.assigneeId,
       type: "TASK_ASSIGNED",
       metadata: { taskId: task.id, projectId, actorId: userId },

@@ -55,10 +55,31 @@ export interface UpdateTaskPendingActionRef {
   changes: FieldChange[];
 }
 
+// Phase 25 Step 4/5: mirrors server/src/ai/tools/generate-project-plan.tool.ts's
+// own ProjectPlanTaskRef/ProjectPlanPendingActionRef exactly. `tempId` is a
+// proposal-local identifier only (used here as a stable React key) - never
+// a real database id, never sent back to the server, never shown to the
+// user as an identifier (see lib/pending-action-format.ts).
+export interface ProjectPlanTaskRef {
+  tempId: string;
+  title: string;
+  description: string | null;
+  priority: TaskPriority;
+}
+
+export interface CreateProjectPlanPendingActionRef {
+  actionType: "CREATE_PROJECT_PLAN";
+  actionId: string;
+  planTitle: string;
+  summary: string | null;
+  expiresAt: string;
+  tasks: ProjectPlanTaskRef[];
+}
+
 // The one payload a "pending_action" SSE event ever carries, discriminated
 // by actionType - mirrors server/src/ai/tool-loop.ts's own PendingActionRef
 // union exactly.
-export type PendingActionRef = PendingTaskActionRef | UpdateTaskPendingActionRef;
+export type PendingActionRef = PendingTaskActionRef | UpdateTaskPendingActionRef | CreateProjectPlanPendingActionRef;
 
 export type StreamChatEvent =
   | { type: "text"; text: string }
@@ -314,6 +335,53 @@ function parseUpdateTaskPendingActionRef(value: Record<string, unknown>): Update
   };
 }
 
+// Mirrors server/src/ai/tool-loop.ts's own isValidProjectPlanTaskRef
+// exactly: every proposed task must individually be well-formed (a
+// non-empty tempId/title, a string-or-null description, a recognized
+// priority) - a malformed entry is dropped rather than trusted, never
+// silently coerced into a valid-looking task.
+function isValidProjectPlanTaskRef(value: unknown): value is ProjectPlanTaskRef {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(entry.tempId) &&
+    isNonEmptyString(entry.title) &&
+    isStringOrNull(entry.description ?? null) &&
+    typeof entry.priority === "string" &&
+    TASK_PRIORITIES.has(entry.priority as TaskPriority)
+  );
+}
+
+// Mirrors server/src/ai/tool-loop.ts's own extractPendingAction validation
+// for a CREATE_PROJECT_PLAN proposal exactly: every required field must be
+// a non-empty string, `tasks` must be an array, and only individually
+// well-formed entries survive. A proposal with zero valid tasks left is
+// treated as malformed (a real one always has at least one, per
+// generateProjectPlanTool's own schema's .min(1)).
+function parseProjectPlanPendingActionRef(value: Record<string, unknown>): CreateProjectPlanPendingActionRef | null {
+  if (
+    !isNonEmptyString(value.actionId) ||
+    !isNonEmptyString(value.planTitle) ||
+    !isNonEmptyString(value.expiresAt) ||
+    !isStringOrNull(value.summary ?? null) ||
+    !Array.isArray(value.tasks)
+  ) {
+    return null;
+  }
+
+  const tasks = value.tasks.filter(isValidProjectPlanTaskRef);
+  if (tasks.length === 0) return null;
+
+  return {
+    actionType: "CREATE_PROJECT_PLAN",
+    actionId: value.actionId,
+    planTitle: value.planTitle,
+    summary: (value.summary as string | null | undefined) ?? null,
+    expiresAt: value.expiresAt,
+    tasks,
+  };
+}
+
 // Defensive shape/enum validation for one parsed "pending_action" JSON
 // body - same posture as the "source" event's own inline filter just
 // below: never pass an arbitrary server payload straight into UI state.
@@ -329,6 +397,7 @@ function parsePendingActionRef(data: unknown): PendingActionRef | null {
 
   if (value.actionType === "CREATE_TASK") return parseCreateTaskPendingActionRef(value);
   if (value.actionType === "UPDATE_TASK") return parseUpdateTaskPendingActionRef(value);
+  if (value.actionType === "CREATE_PROJECT_PLAN") return parseProjectPlanPendingActionRef(value);
   return null;
 }
 

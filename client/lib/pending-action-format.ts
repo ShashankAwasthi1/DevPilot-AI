@@ -44,6 +44,36 @@ function formatDueDate(value: string | null): string {
 // project's member list, so assignee changes fall back to "Unknown
 // member"/"Unassigned" rather than a resolved name; passing a real list
 // in makes resolution work with no other change needed here).
+// --- CREATE_PROJECT_PLAN (Phase 25 Step 5) --------------------------------
+//
+// Kept as small, pure formatting helpers - same "no business logic inside
+// the React component" rule pending-action-card.tsx already follows for
+// CREATE_TASK/UPDATE_TASK via formatFieldValue/formatAssignee above.
+
+// Reuses the exact same PRIORITY_LABEL map the task board and the
+// CREATE_TASK proposal card already render from - never a second,
+// divergent set of labels.
+export function formatProjectPlanPriority(priority: TaskPriority): string {
+  return PRIORITY_LABEL[priority];
+}
+
+export function formatProjectPlanTaskCount(count: number): string {
+  return `${count} task${count === 1 ? "" : "s"}`;
+}
+
+// A plan's summary is optional - only ever rendered when it's a genuine,
+// non-empty string. Narrows the type so a caller never has to re-check
+// for null after this returns true.
+export function hasProjectPlanSummary(summary: string | null): summary is string {
+  return summary !== null && summary.length > 0;
+}
+
+// Same "only render when genuinely present" rule as hasProjectPlanSummary,
+// applied to one task's optional description.
+export function hasProjectPlanTaskDescription(description: string | null): description is string {
+  return description !== null && description.length > 0;
+}
+
 export function formatFieldValue(field: FieldChangeField, value: string | null, members: ProjectMember[] = []): string {
   switch (field) {
     case "status":

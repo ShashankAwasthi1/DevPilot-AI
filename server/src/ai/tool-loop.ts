@@ -4,15 +4,17 @@ import { AI_LIMITS } from "./limits";
 import { TOOLS } from "./tools";
 import type { PendingTaskActionRef } from "./tools/create-task.tool";
 import type { FieldChange, UpdateTaskPendingActionRef } from "./tools/update-task.tool";
+import type { ProjectPlanPendingActionRef, ProjectPlanTaskRef } from "./tools/generate-project-plan.tool";
 import type { ToolContext, ToolDefinition } from "./tools/types";
 import type { ProviderContentBlock, ProviderMessage, ProviderToolSpec } from "./provider";
 
-// Phase 24: the two proposal shapes a "pending_action" event can ever
-// carry, discriminated by actionType - createTask's own ref (Phase 19) is
-// unchanged in shape apart from gaining that discriminator; updateTask's
-// ref (Phase 24) is new. Both are built exclusively from server-resolved
-// data (the tool's own DB reads), never from anything else the model said.
-export type PendingActionRef = PendingTaskActionRef | UpdateTaskPendingActionRef;
+// Phase 25 Step 4: the three proposal shapes a "pending_action" event can
+// ever carry, discriminated by actionType - createTask's own ref (Phase
+// 19) and updateTask's ref (Phase 24) are unchanged; generateProjectPlan's
+// ref (Phase 25) is new. All three are built exclusively from
+// server-resolved data (the tool's own DB reads/writes), never from
+// anything else the model said.
+export type PendingActionRef = PendingTaskActionRef | UpdateTaskPendingActionRef | ProjectPlanPendingActionRef;
 
 // Structured RAG citation metadata (Phase 16 Step 5) - only ever populated
 // from searchDocuments' own already-authorized retrieval result (see
@@ -129,6 +131,24 @@ function isUpdateTaskHandlerResult(value: unknown): value is UpdateTaskHandlerRe
   );
 }
 
+// generateProjectPlan (Phase 25) is the fourth tool with this same
+// "minimal model-facing result plus a richer, UI-only record" split - same
+// recognized-by-name rule as createTask/updateTask/searchDocuments above.
+interface GenerateProjectPlanHandlerResult {
+  result: unknown;
+  pendingAction: ProjectPlanPendingActionRef;
+}
+
+function isGenerateProjectPlanHandlerResult(value: unknown): value is GenerateProjectPlanHandlerResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "result" in value &&
+    "pendingAction" in value &&
+    typeof (value as { pendingAction: unknown }).pendingAction === "object"
+  );
+}
+
 // Executes ONE already-selected tool call: unknown tool, malformed
 // arguments, and any handler failure (including an access-check AppError)
 // all collapse to the same safe, non-throwing `{ ok: false }` outcome -
@@ -155,6 +175,10 @@ export async function executeToolCall(
     }
 
     if (tool.name === "updateTask" && isUpdateTaskHandlerResult(raw)) {
+      return { ok: true, result: raw.result, pendingAction: raw.pendingAction };
+    }
+
+    if (tool.name === "generateProjectPlan" && isGenerateProjectPlanHandlerResult(raw)) {
       return { ok: true, result: raw.result, pendingAction: raw.pendingAction };
     }
 
@@ -213,6 +237,25 @@ function isValidFieldChange(value: unknown): value is FieldChange {
     VALID_CHANGE_FIELDS.has(entry.field) &&
     (entry.from === null || typeof entry.from === "string") &&
     (entry.to === null || typeof entry.to === "string")
+  );
+}
+
+// Same defensive-validation posture as isValidFieldChange above, applied to
+// generate-project-plan.tool.ts's own already-server-built ProjectPlanTaskRef
+// entries - even though this data was only just constructed by that tool a
+// moment ago, it is never forwarded to the SSE stream without re-checking
+// the fields the frontend actually depends on.
+function isValidProjectPlanTaskRef(value: unknown): value is ProjectPlanTaskRef {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Record<string, unknown>;
+  return (
+    typeof entry.tempId === "string" &&
+    entry.tempId.length > 0 &&
+    typeof entry.title === "string" &&
+    entry.title.length > 0 &&
+    (entry.description === null || typeof entry.description === "string") &&
+    typeof entry.priority === "string" &&
+    entry.priority.length > 0
   );
 }
 
@@ -296,6 +339,40 @@ export function extractPendingAction(
       taskTitle: pa.taskTitle,
       expiresAt: pa.expiresAt,
       changes,
+    };
+  }
+
+  if (tool?.name === "generateProjectPlan") {
+    const pa = executionResult.pendingAction as ProjectPlanPendingActionRef;
+    if (
+      typeof pa.actionId !== "string" ||
+      pa.actionId.length === 0 ||
+      typeof pa.planTitle !== "string" ||
+      pa.planTitle.length === 0 ||
+      typeof pa.expiresAt !== "string" ||
+      pa.expiresAt.length === 0 ||
+      !Array.isArray(pa.tasks)
+    ) {
+      return null;
+    }
+
+    // Only individually well-formed task entries survive - never an empty
+    // plan (a real ProjectPlanPendingActionRef always has at least one
+    // task, per generateProjectPlanTool's own schema's .min(1), so an
+    // empty result here means the payload was malformed, not a
+    // legitimate zero-task plan).
+    const tasks = pa.tasks.filter(isValidProjectPlanTaskRef);
+    if (tasks.length === 0) {
+      return null;
+    }
+
+    return {
+      actionType: "CREATE_PROJECT_PLAN",
+      actionId: pa.actionId,
+      planTitle: pa.planTitle,
+      summary: pa.summary ?? null,
+      expiresAt: pa.expiresAt,
+      tasks,
     };
   }
 

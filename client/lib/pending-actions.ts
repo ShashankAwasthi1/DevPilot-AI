@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { api, ApiError } from "./api";
 import type { Task } from "./types";
 
 // Path construction matches every other lib/*.ts module exactly (tasks.ts,
@@ -15,20 +15,40 @@ export interface CancelPendingTaskActionResult {
   status: "CANCELLED";
 }
 
+// Phase 25 Step 5: the confirm endpoint now returns one of two shapes
+// (server/src/controllers/pending-task-action.controller.ts, Phase 25
+// Step 3) - { data: { task } } for a CREATE_TASK/UPDATE_TASK confirmation,
+// { data: { tasks } } for a CREATE_PROJECT_PLAN confirmation. A
+// discriminated union (rather than a bare `Task | Task[]`) so a caller
+// must explicitly check `kind` before touching either field - it can never
+// accidentally treat a single Task as an array or vice versa.
+export type ConfirmPendingActionResult = { kind: "task"; task: Task } | { kind: "tasks"; tasks: Task[] };
+
 // POST /projects/:projectId/conversations/:conversationId/actions/:actionId/confirm
 // No request body - the server resolves everything it needs from the
 // authenticated session and these three path segments (see
-// server/src/controllers/pending-task-action.controller.ts). Returns the
-// newly-created Task, matching the server's { task: TaskDto } response
-// exactly - no new type needed since Task already mirrors TaskDto.
+// server/src/controllers/pending-task-action.controller.ts). Exactly one
+// request regardless of which proposal type this action is - a
+// CREATE_PROJECT_PLAN confirmation is not turned into one request per
+// proposed task.
 export function confirmPendingTaskAction(
   projectId: string,
   conversationId: string,
   actionId: string,
-): Promise<Task> {
+): Promise<ConfirmPendingActionResult> {
   return api
-    .post<{ task: Task }>(`/projects/${projectId}/conversations/${conversationId}/actions/${actionId}/confirm`)
-    .then((result) => result.task);
+    .post<{ task?: Task; tasks?: Task[] }>(
+      `/projects/${projectId}/conversations/${conversationId}/actions/${actionId}/confirm`,
+    )
+    .then((result) => {
+      if (Array.isArray(result.tasks)) return { kind: "tasks", tasks: result.tasks };
+      if (result.task) return { kind: "task", task: result.task };
+      // Defensive-only: the server always sends exactly one of the two
+      // fields (see the controller's own Array.isArray discrimination) -
+      // this can only mean an unexpected response shape, never a value a
+      // caller should silently treat as success.
+      throw new ApiError(500, "Something went wrong. Please try again.");
+    });
 }
 
 // POST /projects/:projectId/conversations/:conversationId/actions/:actionId/cancel

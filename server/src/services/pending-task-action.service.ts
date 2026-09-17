@@ -10,7 +10,7 @@ import {
   updateTask as updateTaskViaService,
   type TaskDto,
 } from "./task.service";
-import { assertRole } from "./project.service";
+import { assertRole, getProjectAccess } from "./project.service";
 import { createTaskSchema, updateTaskSchema, type CreateTaskInput } from "../validation/task.validation";
 
 export interface CreatePendingTaskActionParams {
@@ -125,6 +125,42 @@ const updateTaskProposalSchema = z.object({
 
 type UpdateTaskProposal = z.infer<typeof updateTaskProposalSchema>;
 
+// Mirrors generate-project-plan.tool.ts's own schema exactly - redeclared
+// here (not imported) for the same reason updateTaskSnapshotSchema/
+// updateTaskProposalSchema above are: services never depend on the AI tool
+// layer, only the reverse. Re-validated the same defensive way every other
+// proposedInput on this model is - never trust a stored JSON blob as
+// still correctly-shaped just because it passed the tool's own schema once
+// at propose time.
+const projectPlanTaskSchema = z
+  .object({
+    tempId: z.string().trim().min(1).max(20),
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(10000).nullable().optional(),
+    priority: z.enum(["LOW", "MEDIUM", "HIGH", "URGENT"]),
+  })
+  .strict();
+
+const projectPlanProposalSchema = z
+  .object({
+    planTitle: z.string().trim().min(1).max(200),
+    summary: z.string().trim().max(2000).nullable().optional(),
+    tasks: z.array(projectPlanTaskSchema).min(1).max(AI_LIMITS.MAX_PLAN_TASKS),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const ids = new Set<string>();
+    for (const task of value.tasks) {
+      if (ids.has(task.tempId)) {
+        ctx.addIssue({ code: "custom", path: ["tasks"], message: "Task tempId values must be unique." });
+        break;
+      }
+      ids.add(task.tempId);
+    }
+  });
+
+type ProjectPlanProposal = z.infer<typeof projectPlanProposalSchema>;
+
 // Looks up a PendingTaskAction scoped by all four identifying values at
 // once - actionId, projectId, conversationId, AND userId - so a valid
 // actionId can never be paired with someone else's userId, or a different
@@ -170,7 +206,7 @@ export async function confirmPendingTaskAction(
   projectId: string,
   conversationId: string,
   userId: string,
-): Promise<TaskDto> {
+): Promise<TaskDto | TaskDto[]> {
   const action = await findOwnedPendingTaskAction(actionId, projectId, conversationId, userId);
 
   if (action.status !== "PENDING") {
@@ -182,12 +218,16 @@ export async function confirmPendingTaskAction(
   }
 
   // The shared ownership/PENDING/expiry checks above apply identically to
-  // both proposal types - only what happens next (re-validation, the
+  // every proposal type - only what happens next (re-validation, the
   // authorization re-check, and which service function actually mutates)
-  // differs, so it's split into its own function rather than growing this
-  // one into two interleaved code paths.
+  // differs, so each is split into its own function rather than growing
+  // this one into several interleaved code paths.
   if (action.actionType === "UPDATE_TASK") {
     return confirmUpdateTaskAction(action);
+  }
+
+  if (action.actionType === "CREATE_PROJECT_PLAN") {
+    return confirmCreateProjectPlanAction(action);
   }
 
   // Re-parsed through the exact same schema the real, human-facing
@@ -387,6 +427,125 @@ async function confirmUpdateTaskAction(action: PendingTaskAction): Promise<TaskD
   }
 
   return updatedTask;
+}
+
+// Confirms an AI-proposed multi-task project plan, executing it for real.
+// Mirrors confirmUpdateTaskAction/the CREATE_TASK path above in every
+// structural respect (re-validate the stored proposal, re-check LIVE
+// authorization, THEN atomically claim, THEN mutate via the existing
+// service function, never prisma.task.create directly) - with one
+// addition unique to a plan: every proposed task must be created inside a
+// single Prisma transaction, so a failure partway through leaves none of
+// them behind rather than a partial plan.
+//
+// Ordering:
+//   1. re-validate the stored proposal shape (never trust it as already-safe)
+//   2. re-check LIVE authorization (getProjectAccess/assertRole) - a plan
+//      has no single existing task to re-check against (unlike
+//      UPDATE_TASK's staleness check), so this re-checks the project
+//      itself, exactly like generateProjectPlanTool's own propose-time
+//      check
+//   3. ONLY THEN attempt the atomic PENDING -> CONFIRMED claim
+//   4. ONLY IF that claim actually affected a row, create every task
+//      inside one prisma.$transaction, passing the SAME tx to every
+//      taskService.createTask call - if any call throws, the whole
+//      transaction (and therefore every task already created inside it)
+//      rolls back together, so no partial plan can ever be persisted
+async function confirmCreateProjectPlanAction(action: PendingTaskAction): Promise<TaskDto[]> {
+  let proposal: ProjectPlanProposal;
+  try {
+    proposal = projectPlanProposalSchema.parse(action.proposedInput);
+  } catch {
+    throw new AppError(500, "Something went wrong creating the project plan.");
+  }
+
+  // Re-checked against the project's CURRENT membership, never trusted
+  // from propose time - the caller's role could have changed (or they
+  // could have lost access to the project entirely) since the plan was
+  // proposed. Same functions generateProjectPlanTool itself uses to
+  // authorize the original proposal, reused rather than reimplemented.
+  const { role } = await getProjectAccess(action.projectId, action.userId);
+  assertRole(role, ["OWNER", "ADMIN", "MEMBER"]);
+
+  // The single atomic boundary and the entire replay/race-prevention
+  // mechanism - identical mechanics to the CREATE_TASK/UPDATE_TASK claims
+  // above. Only a caller whose claim actually affects a row may proceed to
+  // create any tasks; a second confirmation (or a confirm racing a
+  // cancel) can never also win it.
+  const claimed = await prisma.pendingTaskAction.updateMany({
+    where: { id: action.id, status: "PENDING", expiresAt: { gt: new Date() } },
+    data: { status: "CONFIRMED", confirmedAt: new Date() },
+  });
+
+  if (claimed.count === 0) {
+    throw new AppError(409, NOT_PENDING_MESSAGE);
+  }
+
+  let createdTasks: TaskDto[];
+  try {
+    // Every proposed task is created inside this ONE transaction, strictly
+    // in proposal order, all via the same `tx` - never a mix of `tx` and
+    // the global `prisma` for tasks belonging to the same plan. If any
+    // single createTask call throws, the transaction callback rejects and
+    // Prisma rolls back every write already performed inside it (including
+    // any per-task notification write createTask itself might issue) - no
+    // task from this plan can ever survive a partial failure.
+    createdTasks = await prisma.$transaction(async (tx) => {
+      const tasks: TaskDto[] = [];
+      for (const proposedTask of proposal.tasks) {
+        // Only title/description/priority are ever mapped - no
+        // assigneeId, dueDate, or dependency data, matching
+        // generateProjectPlanTool's own deliberately narrow schema.
+        // status is always the same server-side default createTaskSchema
+        // itself would apply (TODO); projectId/userId come from this
+        // action's own columns, never from the stored proposal.
+        const task = await createTaskViaService(
+          action.userId,
+          action.projectId,
+          {
+            title: proposedTask.title,
+            description: proposedTask.description ?? null,
+            status: "TODO",
+            priority: proposedTask.priority,
+          },
+          tx,
+        );
+        tasks.push(task);
+      }
+      return tasks;
+    });
+  } catch (err) {
+    // The action stays CONFIRMED - never reverted to PENDING, and this
+    // actionId can never be confirmed again (the atomic claim above has
+    // already consumed it). Same bookkeeping discipline as both existing
+    // confirm paths, with a plan-specific fallback message. No task from
+    // this failed transaction was ever committed, so resultTaskIds is left
+    // at its schema default (empty array) rather than recording anything.
+    await prisma.pendingTaskAction
+      .update({
+        where: { id: action.id },
+        data: { resultError: toSafeResultError(err, "Project plan creation failed.") },
+      })
+      .catch((bookkeepingErr) => {
+        console.error(`Failed to record resultError for pending action ${action.id}:`, bookkeepingErr);
+      });
+    throw err;
+  }
+
+  try {
+    await prisma.pendingTaskAction.update({
+      where: { id: action.id },
+      data: { resultTaskIds: createdTasks.map((task) => task.id) },
+    });
+  } catch (err) {
+    // The tasks were already created successfully above - never delete
+    // them and never retry creation just because this bookkeeping write
+    // failed. Logged so the inconsistency is at least visible, exactly
+    // like the CREATE_TASK/UPDATE_TASK paths' own resultTaskId bookkeeping.
+    console.error(`Failed to record resultTaskIds for pending action ${action.id}:`, err);
+  }
+
+  return createdTasks;
 }
 
 export interface CancelPendingTaskActionResult {

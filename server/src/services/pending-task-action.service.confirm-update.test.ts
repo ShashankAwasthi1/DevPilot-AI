@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AppError } from "../utils/AppError";
+import type { TaskDto } from "./task.service";
 
 const ACTION_ID = "action-1";
 const PROJECT_ID = "project-1";
@@ -198,7 +199,7 @@ test("confirmPendingTaskAction (UPDATE_TASK): success calls taskService.updateTa
   const spies = mockModules(t);
   const { confirmPendingTaskAction } = await importFreshService();
 
-  const task = await confirmPendingTaskAction(ACTION_ID, PROJECT_ID, CONVERSATION_ID, USER_ID);
+  const task = (await confirmPendingTaskAction(ACTION_ID, PROJECT_ID, CONVERSATION_ID, USER_ID)) as TaskDto;
 
   assert.equal(spies.updateTaskCalls().length, 1);
   assert.equal(task.id, TASK_ID);
@@ -424,7 +425,7 @@ test("confirmPendingTaskAction (UPDATE_TASK): a successful confirmation records 
   const spies = mockModules(t);
   const { confirmPendingTaskAction } = await importFreshService();
 
-  const task = await confirmPendingTaskAction(ACTION_ID, PROJECT_ID, CONVERSATION_ID, USER_ID);
+  const task = (await confirmPendingTaskAction(ACTION_ID, PROJECT_ID, CONVERSATION_ID, USER_ID)) as TaskDto;
 
   assert.equal(task.id, TASK_ID);
   const resultUpdate = spies.updateCalls().find((call) => {

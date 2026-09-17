@@ -297,3 +297,79 @@ test("createTask: creating an unassigned task never sends a notification", async
 
   assert.equal(notificationCalls.length, before, "no assignee means no notification");
 });
+
+// --- Phase 25 Step 2: optional transaction-client propagation -------------
+
+test("createTask: given an explicit (transaction) client, writes the task AND its notification through that same client, never the default prisma singleton", async () => {
+  const { createTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+
+  const globalCreateCallsBefore = createCalls.length;
+  const globalNotificationCallsBefore = notificationCalls.length;
+  const txTaskCreateCalls: { data: Record<string, unknown> }[] = [];
+  const txNotificationCreateCalls: unknown[] = [];
+
+  // A minimal fake transaction client - only the two methods createTask
+  // actually calls on it. Reads inside createTask (getProjectAccess,
+  // assertAssigneeIsProjectMember) intentionally still go through the
+  // globally-mocked `prisma` above, per the documented design (only
+  // writes use the passed-in client).
+  const fakeTx = {
+    task: {
+      create: async (args: { data: Record<string, unknown> }) => {
+        txTaskCreateCalls.push(args);
+        return {
+          id: "task-via-tx",
+          projectId: args.data.projectId,
+          title: args.data.title,
+          description: args.data.description ?? null,
+          status: args.data.status,
+          priority: args.data.priority,
+          assigneeId: args.data.assigneeId ?? null,
+          createdById: args.data.createdById,
+          dueDate: args.data.dueDate ?? null,
+          createdAt: new Date("2026-01-01T00:00:00.000Z"),
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+      },
+    },
+    notification: {
+      create: async (args: unknown) => {
+        txNotificationCreateCalls.push(args);
+        return {};
+      },
+    },
+  };
+
+  const result = await createTask(
+    REAL_USER_ID,
+    REAL_PROJECT_ID,
+    { title: "Task via tx", status: "TODO", priority: "MEDIUM", assigneeId: MEMBER_ID },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    fakeTx as any,
+  );
+
+  assert.equal(result.id, "task-via-tx");
+  assert.equal(txTaskCreateCalls.length, 1, "the write must go through the passed-in client");
+  assert.equal(txNotificationCreateCalls.length, 1, "the notification write must use the same client as the task write");
+
+  // The default (global) prisma mock must never have been touched by this
+  // call - no write is ever split across two different clients.
+  assert.equal(createCalls.length, globalCreateCallsBefore);
+  assert.equal(notificationCalls.length, globalNotificationCallsBefore);
+});
+
+test("createTask: with no client argument, behaves exactly as before (default prisma singleton), preserving backward compatibility", async () => {
+  const { createTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  const before = createCalls.length;
+
+  const result = await createTask(REAL_USER_ID, REAL_PROJECT_ID, {
+    title: "Task via default client",
+    status: "TODO",
+    priority: "MEDIUM",
+  });
+
+  assert.equal(createCalls.length, before + 1);
+  assert.equal(result.title, "Task via default client");
+});

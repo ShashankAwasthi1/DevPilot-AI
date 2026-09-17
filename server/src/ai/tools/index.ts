@@ -1,4 +1,5 @@
 import { createTaskTool } from "./create-task.tool";
+import { generateProjectPlanTool } from "./generate-project-plan.tool";
 import { getActivityTool } from "./get-activity.tool";
 import { getDocumentsTool } from "./get-documents.tool";
 import { getProjectTool } from "./get-project.tool";
@@ -29,6 +30,12 @@ import type { ToolDefinition } from "./types";
 // the pendingAction/SSE bridge, is Phase 24 Step 4) - until then, a real
 // model call to this tool proposes correctly (never mutates a Task) but
 // its result is not yet surfaced as a confirmation card.
+//
+// generateProjectPlan (Phase 25 Step 2) is registered under the exact same
+// interim posture as updateTask above: discoverable and independently
+// testable now, but tool-loop.ts/agent-runner.ts don't yet recognize it by
+// name (that's a later Phase 25 step) - until then it proposes correctly
+// (never creates a Task) but isn't yet surfaced as a confirmation card.
 export const TOOLS: ToolDefinition<any>[] = [
   getProjectTool,
   getTasksTool,
@@ -37,6 +44,7 @@ export const TOOLS: ToolDefinition<any>[] = [
   searchDocumentsTool,
   createTaskTool,
   updateTaskTool,
+  generateProjectPlanTool,
 ];
 
 export type { ToolContext, ToolDefinition } from "./types";

@@ -8,7 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { PendingActionRef } from "@/lib/ai-chat";
-import { FIELD_LABEL, formatFieldValue } from "@/lib/pending-action-format";
+import {
+  FIELD_LABEL,
+  formatFieldValue,
+  formatProjectPlanPriority,
+  formatProjectPlanTaskCount,
+  hasProjectPlanSummary,
+  hasProjectPlanTaskDescription,
+} from "@/lib/pending-action-format";
 import { PRIORITY_BADGE_VARIANT, PRIORITY_LABEL, STATUS_BADGE_VARIANT, STATUS_LABEL } from "@/components/tasks/task-labels";
 import type { ProjectMember } from "@/lib/types";
 import type { PendingActionState } from "./pending-action-state";
@@ -27,11 +34,31 @@ export interface PendingActionCardProps {
   members?: ProjectMember[];
 }
 
-// The task title this proposal is about, regardless of which variant it
-// is - used for both the button aria-labels and the confirmed/cancelled
-// status text, so neither has to branch on actionType a second time.
+// The title this proposal is about, regardless of which variant it is -
+// used for both the button aria-labels and the confirmed/cancelled status
+// text, so neither has to branch on actionType a second time.
 function proposalTitle(action: PendingActionRef): string {
-  return action.actionType === "CREATE_TASK" ? action.title : action.taskTitle;
+  if (action.actionType === "CREATE_TASK") return action.title;
+  if (action.actionType === "UPDATE_TASK") return action.taskTitle;
+  return action.planTitle;
+}
+
+// The exact text shown in the "confirmed" aria-live region - kept as one
+// function so the three actionType branches (and the state.task vs
+// state.tasks split - see pending-action-state.ts) are decided in one
+// place, not duplicated between this and any other status text.
+function confirmedMessage(action: PendingActionRef, state: PendingActionState): string {
+  if (action.actionType === "CREATE_PROJECT_PLAN") {
+    // Falls back to the proposal's own task count on the (structurally
+    // impossible under normal operation) chance state.tasks wasn't set -
+    // never renders a blank success message.
+    const count = state.tasks?.length ?? action.tasks.length;
+    return `Project plan created — ${formatProjectPlanTaskCount(count)} added to this project.`;
+  }
+  if (action.actionType === "CREATE_TASK") {
+    return state.task ? `Task created: "${state.task.title}"` : "Task created";
+  }
+  return state.task ? `Task updated: "${state.task.title}"` : "Task updated";
 }
 
 // Purely presentational - no fetch, no api.ts import, no knowledge of
@@ -88,18 +115,17 @@ export function PendingActionCard({ action, state, onConfirm, onCancel, members 
 
           {action.actionType === "CREATE_TASK" ? (
             <CreateTaskProposal action={action} />
-          ) : (
+          ) : action.actionType === "UPDATE_TASK" ? (
             <UpdateTaskProposal action={action} members={members} />
+          ) : (
+            <ProjectPlanProposal action={action} />
           )}
 
           <div aria-live="polite" className="min-h-4 text-xs">
             {state.status === "confirmed" && (
               <p className="flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-500">
                 <CircleCheck className="size-3.5 shrink-0" aria-hidden="true" />
-                <span>
-                  {action.actionType === "CREATE_TASK" ? "Task created" : "Task updated"}
-                  {state.task ? `: "${state.task.title}"` : ""}
-                </span>
+                <span>{confirmedMessage(action, state)}</span>
               </p>
             )}
             {state.status === "cancelled" && (
@@ -235,6 +261,48 @@ function UpdateTaskProposal({ action, members }: UpdateTaskProposalProps) {
           </div>
         ))}
       </dl>
+    </div>
+  );
+}
+
+interface ProjectPlanProposalProps {
+  action: Extract<PendingActionRef, { actionType: "CREATE_PROJECT_PLAN" }>;
+}
+
+// Renders generateProjectPlanTool's own already-server-built plan - every
+// value shown is plain text (title/summary/task fields) or a fixed label
+// resolved via formatProjectPlanPriority/PRIORITY_BADGE_VARIANT (the same
+// maps CreateTaskProposal above already uses), never
+// dangerouslySetInnerHTML, never any HTML parsing. `tempId` is used only as
+// a React list key - it is never rendered, matching this file's own
+// existing rule that actionId is likewise display-invisible. The task list
+// is bounded (max-h + overflow-y-auto) so a large plan scrolls within the
+// chat card instead of growing it without limit.
+function ProjectPlanProposal({ action }: ProjectPlanProposalProps) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-1">
+        <p className="text-xs text-muted-foreground">Project plan</p>
+        <p className="text-sm font-medium break-words">{action.planTitle}</p>
+        {hasProjectPlanSummary(action.summary) && (
+          <p className="text-sm break-words text-muted-foreground">{action.summary}</p>
+        )}
+        <p className="text-xs text-muted-foreground">{formatProjectPlanTaskCount(action.tasks.length)}</p>
+      </div>
+
+      <ol className="ml-4 flex max-h-56 list-decimal flex-col gap-2 overflow-y-auto pr-1 text-sm marker:text-muted-foreground">
+        {action.tasks.map((task) => (
+          <li key={task.tempId} className="pl-1">
+            <span className="font-medium break-words">{task.title}</span>
+            <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+              <Badge variant={PRIORITY_BADGE_VARIANT[task.priority]}>{formatProjectPlanPriority(task.priority)}</Badge>
+            </div>
+            {hasProjectPlanTaskDescription(task.description) && (
+              <p className="mt-0.5 break-words text-xs text-muted-foreground">{task.description}</p>
+            )}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
