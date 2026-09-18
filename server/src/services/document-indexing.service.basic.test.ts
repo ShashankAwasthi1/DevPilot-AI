@@ -20,11 +20,16 @@ test("indexDocument: chunks content, embeds all chunks, and stores matching chun
 
   const insertedRows: { values: unknown[] }[] = [];
   const deleteManyCalls: unknown[] = [];
+  const statusUpdateCalls: unknown[] = [];
   let embedCalledWith: string[][] = [];
 
   const fakeTx = {
     document: {
       findUnique: async () => ({ updatedAt: SAME_UPDATED_AT }),
+      update: async (args: unknown) => {
+        statusUpdateCalls.push(args);
+        return {};
+      },
     },
     documentChunk: {
       deleteMany: async (args: unknown) => {
@@ -91,4 +96,13 @@ test("indexDocument: chunks content, embeds all chunks, and stores matching chun
   // are inserted.
   assert.equal(deleteManyCalls.length, 1);
   assert.deepEqual(deleteManyCalls[0], { where: { documentId: "doc-1" } });
+
+  // Phase 26: indexStatus moves to READY in the SAME staleness-gated
+  // transaction as the chunk replacement above - never a separate,
+  // unguarded write.
+  assert.equal(statusUpdateCalls.length, 1);
+  assert.deepEqual(statusUpdateCalls[0], {
+    where: { id: "doc-1" },
+    data: { indexStatus: "READY" },
+  });
 });

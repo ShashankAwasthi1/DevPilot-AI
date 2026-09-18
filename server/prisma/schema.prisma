@@ -52,6 +52,21 @@ enum MessageRole {
   ASSISTANT
 }
 
+// Phase 26: the lifecycle of a Document's search index, derived entirely
+// server-side (never client-settable - see document.validation.ts, which
+// declares no such field). Lives on Document, not DocumentChunk, since
+// indexing is always a whole-document, all-or-nothing operation (delete +
+// reinsert every chunk together) - there is no per-chunk status to track.
+// READY means "indexStatus and document_chunks are in sync with this row's
+// current content", including the legitimate zero-chunk cases (empty
+// content, or an archived document) - never a hopeful default detached
+// from an actual chunk-mutating write.
+enum DocumentIndexStatus {
+  PENDING
+  READY
+  FAILED
+}
+
 // Phase 19: lifecycle of an AI-proposed task creation. A row only ever
 // moves PENDING -> CONFIRMED or PENDING -> CANCELLED, both via a single
 // atomic conditional update (WHERE status = PENDING) at confirm/cancel
@@ -235,14 +250,23 @@ model Notification {
 }
 
 model Document {
-  id         String    @id @default(cuid())
-  projectId  String
-  authorId   String
-  title      String
-  content    String
-  archivedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id          String              @id @default(cuid())
+  projectId   String
+  authorId    String
+  title       String
+  content     String
+  archivedAt  DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  // Phase 26: set explicitly by document.service.ts/document-indexing.
+  // service.ts at every write that changes what this document's chunks
+  // should be (create, update, archive, and each indexing attempt) -
+  // never left to this column default for an application write. The
+  // column default (PENDING) exists only for a hypothetical insert that
+  // omits it and for schema/type-generation purposes; the migration's own
+  // one-time backfill of pre-existing rows to READY is a separate,
+  // deliberate exception (see that migration's comment).
+  indexStatus DocumentIndexStatus @default(PENDING)
 
   project Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   author  User            @relation(fields: [authorId], references: [id])

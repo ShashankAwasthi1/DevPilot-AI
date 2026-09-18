@@ -34,6 +34,26 @@ export const AI_LIMITS = {
   // ever sent to the embedding provider.
   MAX_SEARCH_RESULTS: 5,
   MAX_SEARCH_QUERY_LENGTH: 300,
+  // Phase 26 Step 4 (RAG retrieval guardrails) - the maximum pgvector
+  // cosine distance (embedding.<=> operator) a chunk may have to be
+  // considered relevant at all, applied in the retrieval SQL's own WHERE
+  // clause before LIMIT. Both embeddings are L2-normalized (see
+  // local-embedding-provider.ts's normalize: true), so cosine distance
+  // and cosine similarity relate by similarity = 1 - distance: 0.6
+  // distance is equivalent to similarity >= 0.4. This is an unvalidated
+  // heuristic (no labeled relevance dataset exists in this repo), chosen
+  // deliberately on the permissive side so a normal, on-topic query is
+  // never starved of results - kept as a single named, tunable constant
+  // for exactly that reason.
+  MAX_SEARCH_DISTANCE: 0.6,
+  // Phase 26 Step 4 - how many candidate chunks the retrieval SQL query
+  // fetches internally, independent of a caller's own final `limit`. Must
+  // stay comfortably larger than MAX_SEARCH_RESULTS/any per-document cap
+  // so post-retrieval processing (the diversity cap now, hybrid fusion in
+  // a later step) has real candidates to work with rather than an
+  // already-truncated top-N. Application code (never SQL) truncates to
+  // the caller's actual `limit` only after that processing runs.
+  SEARCH_CANDIDATE_LIMIT: 20,
   // Phase 19 (AI-proposed task creation) - how long a PendingTaskAction
   // stays confirmable after the AI proposes it. Checked lazily against
   // expiresAt at confirm time (see the Phase 19 Step 3 design); no cleanup

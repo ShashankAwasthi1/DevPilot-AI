@@ -1,4 +1,4 @@
-import { Document } from "@prisma/client";
+import { Document, DocumentIndexStatus } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
 import { assertRole, getProjectAccess, ProjectRole } from "./project.service";
@@ -33,6 +33,14 @@ export interface DocumentDto {
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  // Phase 26 Step 6: exposes the exact same DocumentIndexStatus value
+  // document-indexing.service.ts/this file's own create/update/archive
+  // paths already maintain (PENDING/READY/FAILED) - read straight off the
+  // Prisma row, never recalculated or inferred here. This is the single
+  // shared DTO every document-returning endpoint already maps through
+  // (create/list/search/get/update/archive), so adding it here is what
+  // exposes it everywhere at once, with no per-endpoint/controller change.
+  indexStatus: DocumentIndexStatus;
 }
 
 function toDocumentDto(document: Document): DocumentDto {
@@ -45,6 +53,7 @@ function toDocumentDto(document: Document): DocumentDto {
     archivedAt: document.archivedAt,
     createdAt: document.createdAt,
     updatedAt: document.updatedAt,
+    indexStatus: document.indexStatus,
   };
 }
 
@@ -92,6 +101,12 @@ export async function createDocument(
         authorId: userId,
         title: input.title,
         content: input.content,
+        // Phase 26: explicit rather than relying on the column's own
+        // @default(PENDING) - this is what document-indexing.service.ts's
+        // indexAfterCommit call below will move to READY/FAILED once it
+        // runs; a brand-new document has no chunks yet, so PENDING is
+        // always correct here.
+        indexStatus: "PENDING",
       },
     });
 
@@ -179,7 +194,13 @@ export async function updateDocument(
   const updated = await prisma.$transaction(async (tx) => {
     const saved = await tx.document.update({
       where: { id: documentId },
-      data: input,
+      // Phase 26: whatever content/title actually changes, the document's
+      // existing chunks (if any) are now stale relative to this new
+      // version - indexStatus moves back to PENDING in the SAME
+      // transaction that saves the new content, never as a separate
+      // write. `input` never declares indexStatus (updateDocumentSchema
+      // has no such field), so there is no collision to guard against.
+      data: { ...input, indexStatus: "PENDING" },
     });
 
     await recordActivity(tx, {
@@ -214,7 +235,12 @@ export async function archiveDocument(
   const archived = await prisma.$transaction(async (tx) => {
     const saved = await tx.document.update({
       where: { id: documentId },
-      data: { archivedAt: new Date() },
+      // Phase 26: an archived document has zero chunks (deleted below,
+      // same transaction) and no indexing work remaining - READY is the
+      // truthful terminal state, not a new ARCHIVED status; PENDING would
+      // wrongly imply indexing is still owed for a document that will
+      // never be re-indexed.
+      data: { archivedAt: new Date(), indexStatus: "READY" },
     });
 
     await recordActivity(tx, {

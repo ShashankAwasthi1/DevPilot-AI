@@ -7,12 +7,17 @@ test("indexDocument: discards a stale indexing run if the document changed while
 
   let deleteManyCalledInsideTransaction = false;
   let insertCount = 0;
+  let statusUpdateCalledInsideTransaction = false;
 
   const fakeTx = {
     document: {
       // The re-check inside the transaction sees a NEWER updatedAt than
       // what indexDocument captured before calling the embedding provider.
       findUnique: async () => ({ updatedAt: laterUpdatedAt }),
+      update: async () => {
+        statusUpdateCalledInsideTransaction = true;
+        return {};
+      },
     },
     documentChunk: {
       deleteMany: async () => {
@@ -57,4 +62,9 @@ test("indexDocument: discards a stale indexing run if the document changed while
 
   assert.equal(deleteManyCalledInsideTransaction, false, "a stale run must never delete the newer chunks");
   assert.equal(insertCount, 0, "a stale run must never insert now-outdated chunks");
+  // Phase 26: a stale run must never touch indexStatus either - the newer
+  // edit that superseded it already reset indexStatus to PENDING at save
+  // time, and only that newer edit's own (still in-flight or already-
+  // completed) indexing run may ever advance it from there.
+  assert.equal(statusUpdateCalledInsideTransaction, false, "a stale run must never change indexStatus");
 });
