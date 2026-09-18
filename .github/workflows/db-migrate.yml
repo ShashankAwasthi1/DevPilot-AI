@@ -1,0 +1,41 @@
+name: DB Migrate (Production)
+
+# Manual-only for now: applying migrations to the production Neon database
+# should be a deliberate, explicit action, not something that fires on a
+# push. Promote this to an automatic trigger only once the team is ready
+# to gate deploys on it.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    name: Prisma migrate deploy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Apply pending migrations to production database
+        # `prisma migrate deploy` only applies already-committed migration
+        # files in prisma/migrations - it never generates new migrations or
+        # touches schema.prisma, so this is safe to run unattended once
+        # triggered. DATABASE_URL is read from the environment by Prisma
+        # itself; it is never echoed, printed, or passed on the command
+        # line, so it never appears in the workflow log.
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
