@@ -12,6 +12,7 @@ import {
   confirmPendingTaskAction,
 } from "../controllers/pending-task-action.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { aiChatLimiter } from "../middleware/rate-limit";
 import { validate } from "../middleware/validate";
 import {
   createConversationSchema,
@@ -39,6 +40,7 @@ router.delete("/:projectId/conversations/:id", requireAuth, deleteConversation);
 router.post(
   "/:projectId/conversations/:id/messages",
   requireAuth,
+  aiChatLimiter,
   validate(createMessageSchema),
   postMessage,
 );

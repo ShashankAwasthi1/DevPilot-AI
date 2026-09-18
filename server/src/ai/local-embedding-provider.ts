@@ -1,3 +1,4 @@
+import { env as appEnv } from "../config/env";
 import type { EmbeddingProvider } from "./embedding-provider";
 
 // Runs fully locally via ONNX Runtime (no network call at inference time,
@@ -18,6 +19,21 @@ type FeatureExtractionPipeline = (
   options: { pooling: "mean"; normalize: boolean },
 ) => Promise<{ data: ArrayLike<number>; dims: number[] }>;
 
+// Observable load state of the module-scope pipeline below - exposed via
+// getEmbeddingModelStatus() for a health/readiness check (see
+// health.controller.ts) to report without reaching into this module's
+// private state or triggering a load itself. "idle" until the first
+// embed()/warmUpEmbeddingModel() call; "failed" is sticky for the rest of
+// the process's life, matching pipelinePromise's own no-retry behavior
+// below - never silently re-attempted per request.
+export type EmbeddingModelStatus = "idle" | "loading" | "ready" | "failed";
+
+let modelStatus: EmbeddingModelStatus = "idle";
+
+export function getEmbeddingModelStatus(): EmbeddingModelStatus {
+  return modelStatus;
+}
+
 // Lazily created and cached at module scope - loaded once per process
 // (first embed() call, from whichever request happens to trigger it
 // first), then reused for every subsequent call. Never re-created per
@@ -28,11 +44,38 @@ let pipelinePromise: Promise<FeatureExtractionPipeline> | null = null;
 
 function loadPipeline(): Promise<FeatureExtractionPipeline> {
   if (!pipelinePromise) {
-    pipelinePromise = import("@xenova/transformers").then(({ pipeline }) =>
-      pipeline("feature-extraction", MODEL_NAME) as unknown as Promise<FeatureExtractionPipeline>,
-    );
+    modelStatus = "loading";
+    pipelinePromise = import("@xenova/transformers")
+      .then(({ pipeline, env: transformersEnv }) => {
+        // @xenova/transformers defaults its own cacheDir to
+        // <package-install-dir>/.cache - inside node_modules, so a fresh
+        // `npm install` (a typical redeploy) wipes it. Redirect it to a
+        // path outside node_modules (see config/env.ts) before the first
+        // pipeline() call - configurable via EMBEDDING_MODEL_CACHE_DIR so
+        // production can point it at a persistent volume/disk.
+        transformersEnv.cacheDir = appEnv.embeddingModelCacheDir;
+        return pipeline("feature-extraction", MODEL_NAME) as unknown as Promise<FeatureExtractionPipeline>;
+      })
+      .then((extractor) => {
+        modelStatus = "ready";
+        return extractor;
+      })
+      .catch((err: unknown) => {
+        modelStatus = "failed";
+        throw err;
+      });
   }
   return pipelinePromise;
+}
+
+// Triggers the exact same module-scope load as a real embed() call, without
+// embedding any text - used for an optional startup warm-up (see
+// server.ts) so the first real request doesn't pay the cold-start cost.
+// Shares pipelinePromise like everything else here: never creates a second
+// pipeline, and a concurrent embed() call triggered around the same time
+// awaits this same in-flight load rather than starting its own.
+export async function warmUpEmbeddingModel(): Promise<void> {
+  await loadPipeline();
 }
 
 export class LocalEmbeddingProvider implements EmbeddingProvider {

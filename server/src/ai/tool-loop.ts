@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { getAIProvider } from "./index";
-import { AI_LIMITS } from "./limits";
+import { AGENT_LIMITS, AI_LIMITS } from "./limits";
 import { TOOLS } from "./tools";
 import type { PendingTaskActionRef } from "./tools/create-task.tool";
 import type { FieldChange, UpdateTaskPendingActionRef } from "./tools/update-task.tool";
@@ -445,6 +445,13 @@ export interface RunChatTurnParams {
   history: ProviderMessage[]; // already includes the new user message
   toolContext: ToolContext;
   signal: AbortSignal;
+  // Test-only override of the wall-clock timeout - mirrors
+  // agent-runner.ts's own RunAgentTurnParams.limits.timeoutMs override for
+  // exactly the same reason: it lets tests exercise the timeout path with
+  // a real, tiny timer instead of waiting out the real 60s production
+  // value. Real callers (message.controller.ts) never pass this, so
+  // production behavior is unaffected.
+  timeoutMs?: number;
 }
 
 // Orchestrates however many provider round-trips one user message needs.
@@ -454,112 +461,186 @@ export interface RunChatTurnParams {
 // stop_reason:"tool_use" structurally impossible for it (the model has
 // nothing to call) - that is what guarantees this loop terminates, not a
 // heuristic.
+//
+// Phase 27 Step 8: chat mode previously had no wall-clock timeout at all
+// (only the caller's own disconnect signal bounded it - see
+// agent-runner.ts's own comment noting this gap). Mirrors agent-runner's
+// proven internal-AbortController + timeout pattern exactly: an internal
+// controller forwards the caller's own abort, a timer aborts it
+// independently with a distinguishing reason, and chat/agent mode share
+// the exact same AGENT_LIMITS.MAX_AGENT_TIMEOUT_MS wall-clock budget
+// rather than two separately-tuned values. A timeout is surfaced by
+// throwing (never a silent return, unlike a genuine caller disconnect) -
+// message.controller.ts's existing catch-all already distinguishes "the
+// caller's own signal is aborted" (silent, nothing to write) from any
+// other thrown error (writes the existing generic SSE error frame), so a
+// chat-mode timeout needs no changes there: it naturally produces the
+// same safe, generic "Something went wrong generating a response."
+// message a timeout already gets no special-cased text in chat mode,
+// matching this function's pre-existing "any non-abort failure is
+// reported the same way" contract.
 export async function* runChatTurn(params: RunChatTurnParams): AsyncGenerator<TurnEvent> {
-  const provider = getAIProvider();
-  let messages = params.history;
-  let toolCallCount = 0;
-  let fullText = "";
+  // Already gone before we even start - matches the pre-existing
+  // behavior (the round loop's own first-iteration check already caught
+  // this), stated explicitly here because the internal controller below
+  // only ever learns about a caller abort via a forwarding listener,
+  // which never fires retroactively for a signal that is already aborted
+  // by the time it's attached.
+  if (params.signal.aborted) return;
 
-  for (let round = 1; round <= AI_LIMITS.MAX_TOOL_ROUNDS; round++) {
-    if (params.signal.aborted) return;
+  const TIMEOUT_REASON = Symbol("chat-turn-timeout");
+  const internalController = new AbortController();
 
-    const offerTools = round < AI_LIMITS.MAX_TOOL_ROUNDS && toolCallCount < AI_LIMITS.MAX_TOOL_CALLS_TOTAL;
-    const toolSpecs = offerTools ? PROVIDER_TOOL_SPECS : [];
+  // Same first-writer-wins reasoning as agent-runner.ts: once
+  // internalController is aborted, every later .abort() call on it is a
+  // no-op and the first call's reason sticks permanently, so "caller
+  // abort and timeout close together" reduces to whichever callback the
+  // event loop runs first - no separate race-guard flag is needed.
+  const onCallerAbort = () => {
+    internalController.abort();
+  };
+  params.signal.addEventListener("abort", onCallerAbort);
 
-    let roundText = "";
-    const pendingToolUses: { id: string; name: string; input: unknown }[] = [];
-    let stopReason = "end_turn";
+  const timeoutHandle = setTimeout(() => {
+    internalController.abort(TIMEOUT_REASON);
+  }, params.timeoutMs ?? AGENT_LIMITS.MAX_AGENT_TIMEOUT_MS);
 
-    try {
-      for await (const event of provider.streamTurn({
-        systemPrompt: params.systemPrompt,
-        messages,
-        tools: toolSpecs,
-        maxOutputTokens: AI_LIMITS.MAX_OUTPUT_TOKENS,
-        signal: params.signal,
-      })) {
-        if (event.type === "text") {
-          roundText += event.text;
-          fullText += event.text;
-          yield { type: "text", text: event.text };
-        } else if (event.type === "tool_use") {
-          pendingToolUses.push(event);
-        } else if (event.type === "stop") {
-          stopReason = event.reason;
+  const isTimedOut = () =>
+    internalController.signal.aborted && internalController.signal.reason === TIMEOUT_REASON;
+
+  try {
+    const provider = getAIProvider();
+    let messages = params.history;
+    let toolCallCount = 0;
+    let fullText = "";
+
+    for (let round = 1; round <= AI_LIMITS.MAX_TOOL_ROUNDS; round++) {
+      if (internalController.signal.aborted) {
+        if (isTimedOut()) throw new Error("Chat turn timed out");
+        return; // caller disconnect: silent, matching pre-existing behavior
+      }
+
+      const offerTools = round < AI_LIMITS.MAX_TOOL_ROUNDS && toolCallCount < AI_LIMITS.MAX_TOOL_CALLS_TOTAL;
+      const toolSpecs = offerTools ? PROVIDER_TOOL_SPECS : [];
+
+      let roundText = "";
+      const pendingToolUses: { id: string; name: string; input: unknown }[] = [];
+      let stopReason = "end_turn";
+
+      try {
+        for await (const event of provider.streamTurn({
+          systemPrompt: params.systemPrompt,
+          messages,
+          tools: toolSpecs,
+          maxOutputTokens: AI_LIMITS.MAX_OUTPUT_TOKENS,
+          signal: internalController.signal,
+        })) {
+          if (event.type === "text") {
+            roundText += event.text;
+            fullText += event.text;
+            yield { type: "text", text: event.text };
+          } else if (event.type === "tool_use") {
+            pendingToolUses.push(event);
+          } else if (event.type === "stop") {
+            stopReason = event.reason;
+          }
+        }
+      } catch (err) {
+        // AbortSignal cancellation mid-provider-call: a genuine caller
+        // disconnect stops silently, nothing left to report; a timeout
+        // throws instead, so message.controller.ts's existing catch-all
+        // (which checks the CALLER's own signal, still unaborted here)
+        // writes its existing generic SSE error frame. Anything else is a
+        // genuine provider failure - re-throw so that same existing
+        // handling applies exactly as before this step.
+        if (internalController.signal.aborted) {
+          if (isTimedOut()) throw new Error("Chat turn timed out");
+          return;
+        }
+        throw err;
+      }
+
+      messages = [...messages, { role: "assistant", content: buildAssistantBlocks(roundText, pendingToolUses) }];
+
+      if (stopReason !== "tool_use" || pendingToolUses.length === 0) {
+        yield { type: "done", text: fullText };
+        return;
+      }
+
+      // Anthropic requires a tool_result for every tool_use block in the
+      // round, even ones this loop refuses to execute - so the total-call cap
+      // is enforced per block, here, never by omitting a result.
+      const resultBlocks: ProviderContentBlock[] = [];
+      for (const use of pendingToolUses) {
+        if (internalController.signal.aborted) {
+          // don't start further tool work post-disconnect/post-timeout
+          if (isTimedOut()) throw new Error("Chat turn timed out");
+          return;
+        }
+
+        // Every pending tool_use gets a tool_call event, regardless of
+        // whether it will actually run - keeps the SSE tool_call/tool_result
+        // pairing symmetric (one of each per tool_use block the model asked
+        // for), matching the Anthropic-side guarantee that every tool_use
+        // gets a tool_result.
+        yield { type: "tool_call", name: use.name, input: use.input };
+
+        if (toolCallCount >= AI_LIMITS.MAX_TOOL_CALLS_TOTAL) {
+          resultBlocks.push({
+            type: "tool_result",
+            toolUseId: use.id,
+            content: "Tool call limit reached for this message.",
+            isError: true,
+          });
+          yield { type: "tool_result", name: use.name, ok: false };
+          continue; // never executed - the cap is absolute, not per-round
+        }
+
+        toolCallCount++;
+
+        const tool = findTool(use.name);
+        // Tool handlers do not accept an AbortSignal, so a timeout firing
+        // while this await is in flight cannot interrupt it - it's left
+        // to finish naturally, exactly like agent-runner.ts's own tool
+        // execution. This is the very next checkpoint after it resolves.
+        const executionResult = await executeToolCall(tool, use.input, params.toolContext);
+
+        if (internalController.signal.aborted) {
+          if (isTimedOut()) throw new Error("Chat turn timed out");
+          return;
+        }
+
+        resultBlocks.push(buildToolResultBlock(use.id, executionResult, AI_LIMITS.MAX_TOOL_RESULT_CHARS));
+        yield { type: "tool_result", name: use.name, ok: executionResult.ok };
+
+        // Only after a successful call, never for a failed one - and never
+        // an empty event when there's nothing to cite.
+        const sources = extractDocumentSources(tool, executionResult);
+        if (sources.length > 0) {
+          yield { type: "source", sources };
+        }
+
+        // Same "only on success, never empty" rule as sources above. Does
+        // not create a second PendingTaskAction row or change anything about
+        // create-task.tool.ts's own proposal semantics - this only surfaces,
+        // over SSE, the row that tool already created.
+        const pendingAction = extractPendingAction(tool, executionResult);
+        if (pendingAction) {
+          yield { type: "pending_action", pendingAction };
         }
       }
-    } catch (err) {
-      // AbortSignal cancellation mid-provider-call: stop silently, nothing
-      // left to report. Anything else is a genuine provider failure -
-      // re-throw so message.controller.ts's existing SSE error handling
-      // (unchanged from Phase 12) writes `event: error` exactly as before.
-      if (params.signal.aborted) return;
-      throw err;
+
+      messages = [...messages, { role: "user", content: resultBlocks }];
     }
 
-    messages = [...messages, { role: "assistant", content: buildAssistantBlocks(roundText, pendingToolUses) }];
-
-    if (stopReason !== "tool_use" || pendingToolUses.length === 0) {
-      yield { type: "done", text: fullText };
-      return;
-    }
-
-    // Anthropic requires a tool_result for every tool_use block in the
-    // round, even ones this loop refuses to execute - so the total-call cap
-    // is enforced per block, here, never by omitting a result.
-    const resultBlocks: ProviderContentBlock[] = [];
-    for (const use of pendingToolUses) {
-      if (params.signal.aborted) return; // don't start further tool work post-disconnect
-
-      // Every pending tool_use gets a tool_call event, regardless of
-      // whether it will actually run - keeps the SSE tool_call/tool_result
-      // pairing symmetric (one of each per tool_use block the model asked
-      // for), matching the Anthropic-side guarantee that every tool_use
-      // gets a tool_result.
-      yield { type: "tool_call", name: use.name, input: use.input };
-
-      if (toolCallCount >= AI_LIMITS.MAX_TOOL_CALLS_TOTAL) {
-        resultBlocks.push({
-          type: "tool_result",
-          toolUseId: use.id,
-          content: "Tool call limit reached for this message.",
-          isError: true,
-        });
-        yield { type: "tool_result", name: use.name, ok: false };
-        continue; // never executed - the cap is absolute, not per-round
-      }
-
-      toolCallCount++;
-
-      const tool = findTool(use.name);
-      const executionResult = await executeToolCall(tool, use.input, params.toolContext);
-      resultBlocks.push(buildToolResultBlock(use.id, executionResult, AI_LIMITS.MAX_TOOL_RESULT_CHARS));
-      yield { type: "tool_result", name: use.name, ok: executionResult.ok };
-
-      // Only after a successful call, never for a failed one - and never
-      // an empty event when there's nothing to cite.
-      const sources = extractDocumentSources(tool, executionResult);
-      if (sources.length > 0) {
-        yield { type: "source", sources };
-      }
-
-      // Same "only on success, never empty" rule as sources above. Does
-      // not create a second PendingTaskAction row or change anything about
-      // create-task.tool.ts's own proposal semantics - this only surfaces,
-      // over SSE, the row that tool already created.
-      const pendingAction = extractPendingAction(tool, executionResult);
-      if (pendingAction) {
-        yield { type: "pending_action", pendingAction };
-      }
-    }
-
-    messages = [...messages, { role: "user", content: resultBlocks }];
+    // Defensive-only: unreachable under correct configuration, since the
+    // final permitted round always has tools disabled and therefore always
+    // returns via the `done` yield inside the loop above. Kept as a safety
+    // net so this generator can never fail to terminate even under a
+    // degenerate MAX_TOOL_ROUNDS misconfiguration.
+    yield { type: "done", text: fullText };
+  } finally {
+    clearTimeout(timeoutHandle);
+    params.signal.removeEventListener("abort", onCallerAbort);
   }
-
-  // Defensive-only: unreachable under correct configuration, since the
-  // final permitted round always has tools disabled and therefore always
-  // returns via the `done` yield inside the loop above. Kept as a safety
-  // net so this generator can never fail to terminate even under a
-  // degenerate MAX_TOOL_ROUNDS misconfiguration.
-  yield { type: "done", text: fullText };
 }

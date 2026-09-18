@@ -28,6 +28,13 @@ server/.env.test
 server/.env.test.local
 server/.env.production
 server/.env.production.local
+
+# Catch-all: any other .env.* variant (e.g. accidental backups like
+# .env.save), at any depth, must be ignored by default too.
+.env.*
+**/.env.*
+!.env.example
+!**/.env.example
 # .env.example is intentionally NOT ignored — it must be committed
 
 # Next.js build output
