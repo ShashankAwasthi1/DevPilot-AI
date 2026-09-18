@@ -12,16 +12,36 @@ function requireEnv(name: string): string {
   return value;
 }
 
-export interface AIConfig {
-  provider: string;
-  anthropicApiKey: string;
-  anthropicModel: string;
-}
+// A discriminated union (not a single interface with optional fields) so
+// that whichever provider getAIProvider() selects only ever sees its own
+// required keys typed as definitely-present, never `string | undefined` -
+// TypeScript itself enforces that AnthropicProvider can't be constructed
+// against a config shaped for Gemini and vice versa. Only the provider
+// actually selected by AI_PROVIDER has its variables validated - AI_PROVIDER=
+// gemini never requires ANTHROPIC_API_KEY/ANTHROPIC_MODEL, and
+// AI_PROVIDER=anthropic never requires GEMINI_API_KEY/GEMINI_MODEL.
+export type AIConfig =
+  | { provider: "anthropic"; anthropicApiKey: string; anthropicModel: string }
+  | { provider: "gemini"; geminiApiKey: string; geminiModel: string };
 
 export function getAIConfig(): AIConfig {
-  return {
-    provider: process.env.AI_PROVIDER || "anthropic",
-    anthropicApiKey: requireEnv("ANTHROPIC_API_KEY"),
-    anthropicModel: requireEnv("ANTHROPIC_MODEL"),
-  };
+  const provider = process.env.AI_PROVIDER || "anthropic";
+
+  if (provider === "gemini") {
+    return {
+      provider: "gemini",
+      geminiApiKey: requireEnv("GEMINI_API_KEY"),
+      geminiModel: requireEnv("GEMINI_MODEL"),
+    };
+  }
+
+  if (provider === "anthropic") {
+    return {
+      provider: "anthropic",
+      anthropicApiKey: requireEnv("ANTHROPIC_API_KEY"),
+      anthropicModel: requireEnv("ANTHROPIC_MODEL"),
+    };
+  }
+
+  throw new Error(`Unknown AI_PROVIDER: ${provider}`);
 }

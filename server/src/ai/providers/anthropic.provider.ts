@@ -17,6 +17,14 @@ export class AnthropicProvider implements AIProvider {
 
   async *streamTurn(params: StreamTurnParams): AsyncGenerator<StreamEvent> {
     const config = getAIConfig();
+    // getAIProvider() (ai/index.ts) only ever constructs this class when
+    // AI_PROVIDER selected "anthropic", so this branch is always true in
+    // practice - the check exists purely so TypeScript can narrow
+    // AIConfig's discriminated union to the "anthropic" member below,
+    // since getAIConfig() is called fresh here rather than passed in.
+    if (config.provider !== "anthropic") {
+      throw new Error("AnthropicProvider invoked while AI_PROVIDER is not \"anthropic\"");
+    }
     const client = new Anthropic({ apiKey: config.anthropicApiKey });
 
     const stream = client.messages.stream(
