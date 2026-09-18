@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
+import { resolveChatFailureMessage } from "@/lib/chat-failure-message";
 import { useApiData } from "@/lib/use-api-data";
 import { ChatInput } from "./chat-input";
 import { MessageBubble } from "./message-bubble";
@@ -103,7 +104,7 @@ export function ChatPanel({ projectId, conversationId }: ChatPanelProps) {
             {message.sources && message.sources.length > 0 && <SourceFooter sources={message.sources} />}
             {message.failed && (
               <p className="mt-1 text-right text-xs text-destructive">
-                This response failed to generate.
+                {resolveChatFailureMessage(message.failureMessage)}
               </p>
             )}
           </div>

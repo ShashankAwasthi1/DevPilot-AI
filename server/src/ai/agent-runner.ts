@@ -12,7 +12,7 @@ import {
   type PendingActionRef,
 } from "./tool-loop";
 import type { ToolContext } from "./tools/types";
-import type { ProviderContentBlock, ProviderMessage } from "./provider";
+import { ProviderUnavailableError, type ProviderContentBlock, type ProviderMessage } from "./provider";
 
 // Phase 15: a bounded, policy-only orchestration layer around the exact
 // same AIProvider + shared tool-execution primitives runChatTurn already
@@ -44,8 +44,13 @@ export interface RunAgentTurnParams {
 // (no event at all), matching runChatTurn's existing abort semantics.
 // "limit_reached" is deliberately absent - reaching a round/call limit is
 // normal bounded completion (the final tools-disabled round still
-// produces a `done`), not a failure.
-export type AgentErrorReason = "timeout" | "provider_error";
+// produces a `done`), not a failure. "provider_unavailable" (a provider's
+// own transient availability/rate-limit failure surviving its own
+// retry/backoff - see ProviderUnavailableError in ./provider) is
+// distinguished from a generic "provider_error" so the client can be told
+// specifically that the service is temporarily unavailable, not just that
+// something went wrong.
+export type AgentErrorReason = "timeout" | "provider_error" | "provider_unavailable";
 
 export type AgentTurnEvent =
   | { type: "text"; text: string }
@@ -55,6 +60,21 @@ export type AgentTurnEvent =
   | { type: "pending_action"; pendingAction: PendingActionRef }
   | { type: "done"; text: string }
   | { type: "error"; reason: AgentErrorReason };
+
+// Centralized so the four isTimedOut() yield sites below never duplicate
+// this call - control flow guarantees at most one of them ever actually
+// fires per turn (each is immediately followed by `return`), so this logs
+// exactly once per real timeout, never more. Deliberately the only piece
+// of context logged: projectId/userId (already-authenticated route
+// params, not secrets - the same ids routinely appear in this codebase's
+// own activity/notification records) and the configured timeout duration.
+// Never the prompt, message history, or any provider/tool output, which
+// could contain arbitrary user-authored content.
+function logAgentTimeout(toolContext: ToolContext, timeoutMs: number): void {
+  console.error(
+    `Agent turn timed out after ${timeoutMs}ms (projectId=${toolContext.projectId}, userId=${toolContext.userId})`,
+  );
+}
 
 function resolveLimits(overrides: Partial<AgentLimits> | undefined): AgentLimits {
   return {
@@ -112,7 +132,10 @@ export async function* runAgentTurn(params: RunAgentTurnParams): AsyncGenerator<
 
     for (let round = 1; round <= limits.maxRounds; round++) {
       if (internalController.signal.aborted) {
-        if (isTimedOut()) yield { type: "error", reason: "timeout" };
+        if (isTimedOut()) {
+          logAgentTimeout(params.toolContext, limits.timeoutMs);
+          yield { type: "error", reason: "timeout" };
+        }
         return; // caller abort: silent, no done, no error
       }
 
@@ -146,13 +169,20 @@ export async function* runAgentTurn(params: RunAgentTurnParams): AsyncGenerator<
         }
       } catch (err) {
         if (internalController.signal.aborted) {
-          if (isTimedOut()) yield { type: "error", reason: "timeout" };
+          if (isTimedOut()) {
+            logAgentTimeout(params.toolContext, limits.timeoutMs);
+            yield { type: "error", reason: "timeout" };
+          }
           return; // caller abort: silent
         }
         // A genuine provider failure, unrelated to any abort - logged
         // server-side only; the event payload never carries the raw error.
+        // A ProviderUnavailableError (the provider's own retry/backoff
+        // already exhausted - see gemini.provider.ts) is logged and
+        // reported the same way, just with a distinct reason so the
+        // client-facing message can be more specific than the generic one.
         console.error("Agent turn: provider failure:", err instanceof Error ? err.message : err);
-        yield { type: "error", reason: "provider_error" };
+        yield { type: "error", reason: err instanceof ProviderUnavailableError ? "provider_unavailable" : "provider_error" };
         return;
       }
 
@@ -166,7 +196,10 @@ export async function* runAgentTurn(params: RunAgentTurnParams): AsyncGenerator<
       const resultBlocks: ProviderContentBlock[] = [];
       for (const use of pendingToolUses) {
         if (internalController.signal.aborted) {
-          if (isTimedOut()) yield { type: "error", reason: "timeout" };
+          if (isTimedOut()) {
+            logAgentTimeout(params.toolContext, limits.timeoutMs);
+            yield { type: "error", reason: "timeout" };
+          }
           return;
         }
 
@@ -203,7 +236,10 @@ export async function* runAgentTurn(params: RunAgentTurnParams): AsyncGenerator<
         // or yielding anything for this result and before any further
         // tool/round work.
         if (internalController.signal.aborted) {
-          if (isTimedOut()) yield { type: "error", reason: "timeout" };
+          if (isTimedOut()) {
+            logAgentTimeout(params.toolContext, limits.timeoutMs);
+            yield { type: "error", reason: "timeout" };
+          }
           return;
         }
 

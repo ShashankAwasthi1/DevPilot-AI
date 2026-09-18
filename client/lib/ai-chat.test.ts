@@ -457,3 +457,45 @@ test("streamChatMessage: an unrecognized event type is silently ignored, matchin
 
   assert.deepEqual(events, [{ type: "done" }]);
 });
+
+// --- error event: the backend's own safe message must survive the parser,
+// never be replaced/discarded by streamChatMessage itself (a real bug was
+// found downstream, in use-chat-turn.ts discarding it after this point -
+// these tests pin down that the message correctly arrives at this layer
+// intact, so a future regression there can't hide behind "well maybe the
+// parser dropped it too"). ---
+
+test("streamChatMessage: an error event's server-provided message (e.g. a timeout-specific message) is preserved exactly, not replaced by the generic fallback", async (t) => {
+  const sseText = `event: error\ndata: ${JSON.stringify({ message: "The request took too long to complete." })}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.deepEqual(events, [{ type: "error", message: "The request took too long to complete." }]);
+});
+
+test("streamChatMessage: a different safe backend error message (e.g. a genuine provider failure) is also preserved exactly, distinguishable from the timeout message", async (t) => {
+  const sseText = `event: error\ndata: ${JSON.stringify({ message: "Something went wrong generating a response." })}\n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.deepEqual(events, [{ type: "error", message: "Something went wrong generating a response." }]);
+});
+
+test("streamChatMessage: an error event with no data at all falls back to the generic message, never throwing", async (t) => {
+  const sseText = `event: error\ndata: \n\n`;
+
+  const events = await collectEvents(t, sseText);
+
+  assert.deepEqual(events, [{ type: "error", message: "Something went wrong generating a response." }]);
+});
+
+test("streamChatMessage: an error event stops the stream immediately - no further events are emitted afterward", async (t) => {
+  const sseText = [
+    `event: error\ndata: ${JSON.stringify({ message: "The request took too long to complete." })}\n\n`,
+    `event: done\ndata: {}\n\n`,
+  ].join("");
+
+  const events = await collectEvents(t, sseText);
+
+  assert.deepEqual(events, [{ type: "error", message: "The request took too long to complete." }]);
+});

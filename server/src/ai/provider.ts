@@ -40,3 +40,15 @@ export interface AIProvider {
   readonly name: string;
   streamTurn(params: StreamTurnParams): AsyncGenerator<StreamEvent>;
 }
+
+// Thrown by a provider implementation (see gemini.provider.ts) when a
+// transient availability/rate-limit failure (e.g. HTTP 503, 429) persists
+// even after that provider's own bounded retry/backoff is exhausted -
+// distinct from a plain Error so callers (agent-runner.ts,
+// message.controller.ts) can surface a more specific, still-safe
+// "temporarily unavailable" message to the user instead of the fully
+// generic generation-failure message, without ever inspecting a raw
+// status code or provider response body themselves. Never thrown for a
+// permanent failure (auth, invalid request, not-found, malformed
+// response) - those remain plain Errors, exactly as before.
+export class ProviderUnavailableError extends Error {}

@@ -3,6 +3,7 @@ import { runChatTurn, type TurnEvent } from "../ai/tool-loop";
 import { runAgentTurn, type AgentErrorReason, type AgentTurnEvent } from "../ai/agent-runner";
 import { AI_LIMITS } from "../ai/limits";
 import { buildAgentSystemPrompt, buildSystemPrompt } from "../ai/prompt";
+import { ProviderUnavailableError } from "../ai/provider";
 import { buildProjectContext } from "../services/ai-context.service";
 import * as messageService from "../services/message.service";
 import type { ProviderMessage } from "../ai/provider";
@@ -12,9 +13,13 @@ import type { ProviderMessage } from "../ai/provider";
 // the exact same generic message the existing catch-all below already
 // uses for a thrown provider failure, so agent and chat modes present an
 // identical failure message for the identical underlying condition.
+// "provider_unavailable" reuses the exact same text the chat-mode
+// catch-all below uses for a thrown ProviderUnavailableError, so agent and
+// chat modes present an identical message for that identical condition too.
 const AGENT_ERROR_MESSAGES: Record<AgentErrorReason, string> = {
   timeout: "The request took too long to complete.",
   provider_error: "Something went wrong generating a response.",
+  provider_unavailable: "The AI service is temporarily unavailable. Please try again.",
 };
 
 // Streams the assistant's reply back over SSE as it's generated, delegating
@@ -114,6 +119,15 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
         // AgentRunner's own bounded failure (timeout or a provider error it
         // chose to surface as an event rather than a thrown exception) -
         // never the raw reason/message, only a fixed, safe string.
+        //
+        // No console.error call here on purpose: agent-runner.ts already
+        // logs both reasons safely before yielding this event
+        // (logAgentTimeout for "timeout", the existing "Agent turn:
+        // provider failure" log for "provider_error") - a second log line
+        // for the exact same occurrence here would just be noise. The two
+        // reasons stay distinguishable at the source (agent-runner.ts's
+        // own log text differs per reason) rather than being collapsed
+        // into one generic "an error happened" line here.
         agentTurnFailed = true;
         res.write(`event: error\ndata: ${JSON.stringify({ message: AGENT_ERROR_MESSAGES[event.reason] })}\n\n`);
       }
@@ -147,9 +161,17 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
       return;
     }
     console.error(err);
-    res.write(
-      `event: error\ndata: ${JSON.stringify({ message: "Something went wrong generating a response." })}\n\n`,
-    );
+    // Chat mode (runChatTurn) has no in-band { type: "error" } event - it
+    // only ever throws, landing here. A ProviderUnavailableError (the
+    // provider's own retry/backoff already exhausted - see
+    // gemini.provider.ts) gets the same distinct, still-safe message
+    // agent mode's AGENT_ERROR_MESSAGES.provider_unavailable uses; every
+    // other thrown error keeps the existing fully generic message.
+    const message =
+      err instanceof ProviderUnavailableError
+        ? "The AI service is temporarily unavailable. Please try again."
+        : "Something went wrong generating a response.";
+    res.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
     res.end();
   }
 }

@@ -12,6 +12,16 @@ export interface LocalMessage {
   role: ChatMessageRole;
   content: string;
   failed?: boolean;
+  // The backend's own safe, fixed error message for this failure (e.g.
+  // "The request took too long to complete." vs "Something went wrong
+  // generating a response.") - the backend never sends a raw
+  // exception/stack trace/provider detail here (see
+  // server/src/controllers/message.controller.ts's AGENT_ERROR_MESSAGES
+  // and its generic catch-all), so this is always safe to render as-is.
+  // Optional because a message can be marked `failed` from an older
+  // client build or an edge case with no message attached - chat-panel.tsx
+  // falls back to a generic string whenever this is absent.
+  failureMessage?: string;
   // Only ever set on the assistant message currently (or having just
   // finished) streaming in this session - history fetched from the server
   // never has this, since tool calls aren't persisted (see
@@ -173,7 +183,9 @@ export function useChatTurn({ projectId, conversationId }: UseChatTurnOptions): 
         currentAssistantIdRef.current = null;
         setLocalMessages((prev) =>
           prev.map((message) =>
-            message.id === assistantMessageId ? { ...message, failed: true } : message,
+            message.id === assistantMessageId
+              ? { ...message, failed: true, failureMessage: event.message }
+              : message,
           ),
         );
       }
