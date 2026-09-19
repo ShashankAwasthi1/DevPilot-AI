@@ -44,7 +44,11 @@ test("task.routes: GET /tasks/:id requires auth and has no body-validation middl
   const layer = layers(router).find((l) => l.route?.path === "/tasks/:id" && l.route.methods.get);
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
 
-  assert.deepEqual(middlewareNames, ["requireAuth", "getTask"]);
+  // Phase 16A: apiLimiter (a general authenticated-API rate limiter) now
+  // runs right after requireAuth on every route here - express-rate-limit
+  // returns an anonymous middleware function, so it shows up as
+  // "<anonymous>" here, same as validate(...)'s anonymous arrow function.
+  assert.deepEqual(middlewareNames, ["requireAuth", "<anonymous>", "getTask"]);
 });
 
 test("task.routes: POST /projects/:projectId/tasks requires auth and runs create validation before the controller", () => {
@@ -53,9 +57,10 @@ test("task.routes: POST /projects/:projectId/tasks requires auth and runs create
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
 
   assert.equal(middlewareNames[0], "requireAuth");
-  // validate(createTaskSchema) returns an anonymous arrow function.
+  // apiLimiter, then validate(createTaskSchema) - both anonymous.
   assert.equal(middlewareNames[1], "<anonymous>");
-  assert.equal(middlewareNames[2], "createTask");
+  assert.equal(middlewareNames[2], "<anonymous>");
+  assert.equal(middlewareNames[3], "createTask");
 });
 
 test("task.routes: GET /projects/:projectId/tasks requires auth", () => {
@@ -63,7 +68,7 @@ test("task.routes: GET /projects/:projectId/tasks requires auth", () => {
   const layer = layers(router).find((l) => l.route?.path === "/projects/:projectId/tasks" && l.route.methods.get);
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
 
-  assert.deepEqual(middlewareNames, ["requireAuth", "listTasks"]);
+  assert.deepEqual(middlewareNames, ["requireAuth", "<anonymous>", "listTasks"]);
 });
 
 test("task.routes: PATCH /tasks/:id requires auth and runs update validation before the controller", () => {
@@ -73,7 +78,8 @@ test("task.routes: PATCH /tasks/:id requires auth and runs update validation bef
 
   assert.equal(middlewareNames[0], "requireAuth");
   assert.equal(middlewareNames[1], "<anonymous>");
-  assert.equal(middlewareNames[2], "updateTask");
+  assert.equal(middlewareNames[2], "<anonymous>");
+  assert.equal(middlewareNames[3], "updateTask");
 });
 
 test("task.routes: DELETE /tasks/:id requires auth", () => {
@@ -81,7 +87,7 @@ test("task.routes: DELETE /tasks/:id requires auth", () => {
   const layer = layers(router).find((l) => l.route?.path === "/tasks/:id" && l.route.methods.delete);
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
 
-  assert.deepEqual(middlewareNames, ["requireAuth", "deleteTask"]);
+  assert.deepEqual(middlewareNames, ["requireAuth", "<anonymous>", "deleteTask"]);
 });
 
 test("task.routes: /tasks/:id can never collide with comment.routes' /:taskId/comments, regardless of mount order", () => {

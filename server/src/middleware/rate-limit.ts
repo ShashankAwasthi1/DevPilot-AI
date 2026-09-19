@@ -51,3 +51,21 @@ export const aiChatLimiter = rateLimit({
   limit: 20,
   keyGenerator: (req: Request) => req.user!.id,
 });
+
+// General limiter for normal, authenticated CRUD/API traffic (projects,
+// tasks, documents, comments, notifications, dashboard) - separate from,
+// and never a replacement for, the auth-specific and AI-chat limiters
+// above. 200 requests / 15 minutes / authenticated user is generous for a
+// real user driving the UI (list/create/update calls across several
+// screens) while still bounding abuse from a single compromised or
+// scripted session. Always mounted after requireAuth on each route (same
+// convention as aiChatLimiter), so req.user is guaranteed populated here -
+// keyed by user id, never IP, for the same reason aiChatLimiter is: one
+// shared office IP must not mean one shared quota. Health/readiness
+// routes (health.routes.ts) have no requireAuth and never mount this.
+export const apiLimiter = rateLimit({
+  ...SHARED_OPTIONS,
+  windowMs: 15 * 60 * 1000,
+  limit: 200,
+  keyGenerator: (req: Request) => req.user!.id,
+});

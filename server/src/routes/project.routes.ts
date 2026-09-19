@@ -14,6 +14,7 @@ import {
   updateProject,
 } from "../controllers/project.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { apiLimiter } from "../middleware/rate-limit";
 import { validate } from "../middleware/validate";
 import {
   addProjectMemberSchema,
@@ -24,20 +25,21 @@ import {
 
 const router = Router();
 
-router.post("/", requireAuth, validate(createProjectSchema), createProject);
-router.get("/", requireAuth, listProjects);
-router.get("/:id", requireAuth, getProject);
-router.patch("/:id", requireAuth, validate(updateProjectSchema), updateProject);
-router.delete("/:id", requireAuth, archiveProject);
-router.get("/:id/activity", requireAuth, listActivity);
-router.get("/:id/members", requireAuth, listProjectMembers);
-router.post("/:id/members", requireAuth, validate(addProjectMemberSchema), addProjectMember);
+router.post("/", requireAuth, apiLimiter, validate(createProjectSchema), createProject);
+router.get("/", requireAuth, apiLimiter, listProjects);
+router.get("/:id", requireAuth, apiLimiter, getProject);
+router.patch("/:id", requireAuth, apiLimiter, validate(updateProjectSchema), updateProject);
+router.delete("/:id", requireAuth, apiLimiter, archiveProject);
+router.get("/:id/activity", requireAuth, apiLimiter, listActivity);
+router.get("/:id/members", requireAuth, apiLimiter, listProjectMembers);
+router.post("/:id/members", requireAuth, apiLimiter, validate(addProjectMemberSchema), addProjectMember);
 router.patch(
   "/:id/members/:userId",
   requireAuth,
+  apiLimiter,
   validate(updateProjectMemberRoleSchema),
   updateProjectMemberRole,
 );
-router.delete("/:id/members/:userId", requireAuth, removeProjectMember);
+router.delete("/:id/members/:userId", requireAuth, apiLimiter, removeProjectMember);
 
 export default router;

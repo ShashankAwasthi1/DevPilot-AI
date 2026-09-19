@@ -274,6 +274,76 @@ test("aiChatLimiter: reads the authenticated req.user.id, and never silently fal
   assert.ok(calls[0] instanceof Error, "a missing req.user must be forwarded as an error, not silently handled");
 });
 
+// --- apiLimiter: general authenticated-API traffic, user-keyed -------------
+
+test("apiLimiter: requests below the limit (200/15min) all call next() with no error", async () => {
+  const { apiLimiter } = await importFreshRateLimit();
+  const req = makeFakeUserRequest("user-d", "198.51.100.30");
+
+  for (let i = 0; i < 199; i++) {
+    const { res, state } = makeFakeResponse();
+    const { next, calls } = capturingNext();
+    await apiLimiter(req, res, next);
+    assert.equal(calls[0], undefined, `request ${i + 1} must call next() with no error`);
+    assert.equal(state.sent, false);
+  }
+});
+
+test("apiLimiter: the request exceeding the limit (200/15min) receives a 429 with the same JSON error envelope", async () => {
+  const { apiLimiter } = await importFreshRateLimit();
+  const req = makeFakeUserRequest("user-e", "198.51.100.31");
+
+  let lastState: FakeResponseState | undefined;
+  for (let i = 0; i < 201; i++) {
+    const { res, state } = makeFakeResponse();
+    const { next } = capturingNext();
+    await apiLimiter(req, res, next);
+    lastState = state;
+  }
+
+  assert.equal(lastState?.statusCode, 429);
+  assert.deepEqual(lastState?.body, RATE_LIMIT_ERROR_BODY);
+});
+
+test("apiLimiter: different req.user.id values are isolated into independent buckets, even from the identical req.ip", async () => {
+  const { apiLimiter } = await importFreshRateLimit();
+  const sameIp = "198.51.100.32";
+  const reqUserA = makeFakeUserRequest("user-f", sameIp);
+  const reqUserB = makeFakeUserRequest("user-g", sameIp);
+
+  for (let i = 0; i < 201; i++) {
+    const { res } = makeFakeResponse();
+    const { next } = capturingNext();
+    await apiLimiter(reqUserA, res, next);
+  }
+  const { res: aRes, state: aState } = makeFakeResponse();
+  await apiLimiter(reqUserA, aRes, capturingNext().next);
+  assert.equal(aState.statusCode, 429, "user A must be blocked after exceeding their own limit");
+
+  const { res: bRes, state: bState } = makeFakeResponse();
+  const { next: bNext, calls: bCalls } = capturingNext();
+  await apiLimiter(reqUserB, bRes, bNext);
+  assert.equal(bCalls[0], undefined, "a different user id must not share user A's exhausted bucket");
+  assert.equal(bState.sent, false);
+});
+
+test("apiLimiter: reads the authenticated req.user.id, and never silently falls back to IP when req.user is missing", async () => {
+  const { apiLimiter } = await importFreshRateLimit();
+  // requireAuth is guaranteed to run first on every route apiLimiter is
+  // mounted on (see project.routes.ts/task.routes.ts/etc.) - a missing
+  // req.user here represents a middleware-ordering bug, and must surface
+  // as an error via next(err), never silently degrade to IP-keying,
+  // matching aiChatLimiter's own documented convention above.
+  const reqWithNoUser = makeFakeUserRequest(undefined, "198.51.100.33");
+
+  const { res } = makeFakeResponse();
+  const { next, calls } = capturingNext();
+  await apiLimiter(reqWithNoUser, res, next);
+
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0] instanceof Error, "a missing req.user must be forwarded as an error, not silently handled");
+});
+
 // --- fresh instance per test -------------------------------------------------
 
 test("importing a fresh copy of the module yields brand-new limiter instances with no shared state", async () => {

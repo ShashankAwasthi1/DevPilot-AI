@@ -27,7 +27,10 @@ test("conversation.routes: POST /:projectId/conversations/:conversationId/action
 
   assert.ok(layer, "confirm route must be registered");
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
-  assert.deepEqual(middlewareNames, ["requireAuth", "confirmPendingTaskAction"]);
+  // Phase 16A: apiLimiter (general authenticated-API rate limiter) now
+  // runs right after requireAuth - express-rate-limit's returned
+  // middleware is anonymous, so it shows up as "<anonymous>" here.
+  assert.deepEqual(middlewareNames, ["requireAuth", "<anonymous>", "confirmPendingTaskAction"]);
 });
 
 test("conversation.routes: POST /:projectId/conversations/:conversationId/actions/:actionId/cancel is registered, requires auth, and has no validate() middleware (no request body)", () => {
@@ -38,5 +41,5 @@ test("conversation.routes: POST /:projectId/conversations/:conversationId/action
 
   assert.ok(layer, "cancel route must be registered");
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
-  assert.deepEqual(middlewareNames, ["requireAuth", "cancelPendingTaskAction"]);
+  assert.deepEqual(middlewareNames, ["requireAuth", "<anonymous>", "cancelPendingTaskAction"]);
 });

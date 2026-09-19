@@ -25,7 +25,11 @@ test("project.routes: GET /:id/members is registered and requires auth", () => {
 
   assert.ok(layer, "GET /:id/members must be registered");
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
-  assert.deepEqual(middlewareNames, ["requireAuth", "listProjectMembers"]);
+  // Phase 16A: apiLimiter (general authenticated-API rate limiter) now
+  // runs right after requireAuth - express-rate-limit's returned
+  // middleware is anonymous, so it shows up as "<anonymous>" here, same as
+  // validate(...)'s anonymous arrow function elsewhere in this file.
+  assert.deepEqual(middlewareNames, ["requireAuth", "<anonymous>", "listProjectMembers"]);
 });
 
 test("project.routes: POST /:id/members is registered, requires auth, and validates the body", () => {
@@ -35,9 +39,10 @@ test("project.routes: POST /:id/members is registered, requires auth, and valida
   assert.ok(layer, "POST /:id/members must be registered");
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
   assert.equal(middlewareNames[0], "requireAuth");
-  // validate(addProjectMemberSchema) returns an anonymous arrow function.
+  // apiLimiter, then validate(addProjectMemberSchema) - both anonymous.
   assert.equal(middlewareNames[1], "<anonymous>");
-  assert.equal(middlewareNames[2], "addProjectMember");
+  assert.equal(middlewareNames[2], "<anonymous>");
+  assert.equal(middlewareNames[3], "addProjectMember");
 });
 
 test("project.routes: PATCH /:id/members/:userId is registered, requires auth, and validates the body", () => {
@@ -47,9 +52,10 @@ test("project.routes: PATCH /:id/members/:userId is registered, requires auth, a
   assert.ok(layer, "PATCH /:id/members/:userId must be registered");
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
   assert.equal(middlewareNames[0], "requireAuth");
-  // validate(updateProjectMemberRoleSchema) returns an anonymous arrow function.
+  // apiLimiter, then validate(updateProjectMemberRoleSchema) - both anonymous.
   assert.equal(middlewareNames[1], "<anonymous>");
-  assert.equal(middlewareNames[2], "updateProjectMemberRole");
+  assert.equal(middlewareNames[2], "<anonymous>");
+  assert.equal(middlewareNames[3], "updateProjectMemberRole");
 });
 
 test("project.routes: DELETE /:id/members/:userId is registered and requires auth", () => {
@@ -58,5 +64,5 @@ test("project.routes: DELETE /:id/members/:userId is registered and requires aut
 
   assert.ok(layer, "DELETE /:id/members/:userId must be registered");
   const middlewareNames = layer!.route!.stack.map((s) => s.name);
-  assert.deepEqual(middlewareNames, ["requireAuth", "removeProjectMember"]);
+  assert.deepEqual(middlewareNames, ["requireAuth", "<anonymous>", "removeProjectMember"]);
 });

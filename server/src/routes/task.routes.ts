@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { createTask, deleteTask, getTask, listTasks, updateTask } from "../controllers/task.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { apiLimiter } from "../middleware/rate-limit";
 import { validate } from "../middleware/validate";
 import { createTaskSchema, updateTaskSchema } from "../validation/task.validation";
 
@@ -14,10 +15,10 @@ import { createTaskSchema, updateTaskSchema } from "../validation/task.validatio
 // the task/project id it's actually given (see task.service.ts).
 const router = Router();
 
-router.post("/projects/:projectId/tasks", requireAuth, validate(createTaskSchema), createTask);
-router.get("/projects/:projectId/tasks", requireAuth, listTasks);
-router.get("/tasks/:id", requireAuth, getTask);
-router.patch("/tasks/:id", requireAuth, validate(updateTaskSchema), updateTask);
-router.delete("/tasks/:id", requireAuth, deleteTask);
+router.post("/projects/:projectId/tasks", requireAuth, apiLimiter, validate(createTaskSchema), createTask);
+router.get("/projects/:projectId/tasks", requireAuth, apiLimiter, listTasks);
+router.get("/tasks/:id", requireAuth, apiLimiter, getTask);
+router.patch("/tasks/:id", requireAuth, apiLimiter, validate(updateTaskSchema), updateTask);
+router.delete("/tasks/:id", requireAuth, apiLimiter, deleteTask);
 
 export default router;

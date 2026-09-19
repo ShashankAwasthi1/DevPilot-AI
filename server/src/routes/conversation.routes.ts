@@ -12,7 +12,7 @@ import {
   confirmPendingTaskAction,
 } from "../controllers/pending-task-action.controller";
 import { requireAuth } from "../middleware/auth.middleware";
-import { aiChatLimiter } from "../middleware/rate-limit";
+import { aiChatLimiter, apiLimiter } from "../middleware/rate-limit";
 import { validate } from "../middleware/validate";
 import {
   createConversationSchema,
@@ -25,18 +25,24 @@ const router = Router();
 router.post(
   "/:projectId/conversations",
   requireAuth,
+  apiLimiter,
   validate(createConversationSchema),
   createConversation,
 );
-router.get("/:projectId/conversations", requireAuth, listConversations);
-router.get("/:projectId/conversations/:id", requireAuth, getConversation);
+router.get("/:projectId/conversations", requireAuth, apiLimiter, listConversations);
+router.get("/:projectId/conversations/:id", requireAuth, apiLimiter, getConversation);
 router.patch(
   "/:projectId/conversations/:id",
   requireAuth,
+  apiLimiter,
   validate(updateConversationSchema),
   updateConversation,
 );
-router.delete("/:projectId/conversations/:id", requireAuth, deleteConversation);
+router.delete("/:projectId/conversations/:id", requireAuth, apiLimiter, deleteConversation);
+// The AI message route intentionally does NOT get apiLimiter - it already
+// has its own tighter, purpose-built limiter (aiChatLimiter) bounding LLM
+// spend, which must stay the only limiter governing this route rather than
+// stacking a second, unrelated quota on top of it.
 router.post(
   "/:projectId/conversations/:id/messages",
   requireAuth,
@@ -52,11 +58,13 @@ router.post(
 router.post(
   "/:projectId/conversations/:conversationId/actions/:actionId/confirm",
   requireAuth,
+  apiLimiter,
   confirmPendingTaskAction,
 );
 router.post(
   "/:projectId/conversations/:conversationId/actions/:actionId/cancel",
   requireAuth,
+  apiLimiter,
   cancelPendingTaskAction,
 );
 
