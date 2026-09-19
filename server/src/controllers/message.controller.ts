@@ -59,7 +59,36 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
   }
 
   const abortController = new AbortController();
-  req.on("close", () => abortController.abort());
+
+  // SSE heartbeat: a bare comment line (no `event:`/`data:` prefix, so it
+  // is invisible to EventSource and to this app's own SSE parsing - it
+  // can never be mistaken for a real message/tool/pending_action/done/
+  // error event) written roughly every 15s while a turn is active. A long
+  // tool-calling round can go quite a while with no text/tool output at
+  // all; without this, an idle-connection timeout on a proxy sitting
+  // between the browser and this server could sever the connection well
+  // before the AI turn's own 60s timeout (ai/limits.ts) ever gets a
+  // chance to fire on its own. Guarded by `res.writableEnded` in case the
+  // interval fires in the narrow window between the client disconnecting
+  // and `stopHeartbeat` below actually running - never writes to an
+  // already-closed response.
+  const HEARTBEAT_INTERVAL_MS = 15000;
+  let heartbeatTimer: NodeJS.Timeout | undefined;
+  function stopHeartbeat() {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = undefined;
+    }
+  }
+
+  req.on("close", () => {
+    abortController.abort();
+    // Stops immediately on disconnect, rather than waiting for the
+    // `finally` block below to run once the in-flight turn notices the
+    // abort - avoids a heartbeat tick attempting to write to a socket
+    // that's already gone.
+    stopHeartbeat();
+  });
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -68,6 +97,14 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
     "X-Accel-Buffering": "no",
   });
   res.flushHeaders();
+
+  heartbeatTimer = setInterval(() => {
+    if (res.writableEnded) {
+      stopHeartbeat();
+      return;
+    }
+    res.write(":\n\n");
+  }, HEARTBEAT_INTERVAL_MS);
 
   let finalText = "";
   // Set only when AgentRunner yields its own in-band { type: "error" }
@@ -173,5 +210,14 @@ export async function postMessage(req: Request, res: Response, next: NextFunctio
         : "Something went wrong generating a response.";
     res.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
     res.end();
+  } finally {
+    // Every exit path from the try/catch above - normal completion, the
+    // early return on an in-band agent error, a client disconnect, or any
+    // other thrown/caught error - must stop the heartbeat here. This is
+    // the single source of truth for "the turn is no longer active";
+    // req.on("close")'s own call to stopHeartbeat only covers the
+    // disconnect case specifically, and is a no-op by the time this runs
+    // if that already fired.
+    stopHeartbeat();
   }
 }

@@ -613,9 +613,12 @@ test("streamTurn: a malformed JSON data line is skipped without aborting the res
   ]);
 });
 
-test("streamTurn: a chunk with no candidates is skipped without throwing", async (t) => {
+test("streamTurn: a candidates-bearing chunk with no text parts (a legitimate terminal chunk) is skipped without throwing", async (t) => {
   t.mock.method(globalThis, "fetch", async () =>
-    sseResponse([{}, { candidates: [{ content: { parts: [{ text: "hi" }] } }] }]),
+    sseResponse([
+      { candidates: [{ finishReason: "STOP" }] },
+      { candidates: [{ content: { parts: [{ text: "hi" }] } }] },
+    ]),
   );
 
   const provider = new GeminiProvider();
@@ -624,6 +627,129 @@ test("streamTurn: a chunk with no candidates is skipped without throwing", async
   );
 
   assert.deepEqual(events, [{ type: "text", text: "hi" }, { type: "stop", reason: "end_turn" }]);
+});
+
+test("streamTurn: a trailing usageMetadata-only chunk (no candidates) is skipped without throwing", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    sseResponse([
+      { candidates: [{ content: { parts: [{ text: "hi" }] } }] },
+      { usageMetadata: { totalTokenCount: 42 } },
+    ]),
+  );
+
+  const provider = new GeminiProvider();
+  const events = await collect(
+    provider.streamTurn({ ...BASE_PARAMS, messages: [{ role: "user", content: "hi" }], tools: NO_TOOLS }),
+  );
+
+  assert.deepEqual(events, [{ type: "text", text: "hi" }, { type: "stop", reason: "end_turn" }]);
+});
+
+// Phase 16D (B1): previously, a chunk with neither `candidates` nor
+// `usageMetadata` nor `error` was silently skipped - exactly the bug that
+// let a genuinely truncated/erroring mid-stream response masquerade as a
+// complete, successful one. It must now be treated as a hard failure.
+test("streamTurn: a genuinely unrecognized chunk (no candidates, no usageMetadata, no error) throws rather than being silently skipped", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    sseResponse([{ candidates: [{ content: { parts: [{ text: "before" }] } }] }, {}]),
+  );
+
+  const provider = new GeminiProvider();
+  await assert.rejects(
+    () => collect(provider.streamTurn({ ...BASE_PARAMS, messages: [{ role: "user", content: "hi" }], tools: NO_TOOLS })),
+    /unexpected stream chunk/,
+  );
+});
+
+test("streamTurn: a genuinely unrecognized mid-stream chunk means the already-streamed partial text is never followed by a stop/done event", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    sseResponse([{ candidates: [{ content: { parts: [{ text: "partial answer" }] } }] }, {}]),
+  );
+
+  const provider = new GeminiProvider();
+  const events: StreamEvent[] = [];
+  await assert.rejects(async () => {
+    for await (const event of provider.streamTurn({
+      ...BASE_PARAMS,
+      messages: [{ role: "user", content: "hi" }],
+      tools: NO_TOOLS,
+    })) {
+      events.push(event);
+    }
+  });
+
+  // The "before" text was already yielded (already streamed to the
+  // client) - but no "stop" event ever follows it, so agent-runner.ts/
+  // tool-loop.ts never sets finalText and this partial output can never
+  // be persisted as a successful assistant message (see
+  // message.controller.ts's finalText/done handling).
+  assert.deepEqual(events, [{ type: "text", text: "partial answer" }]);
+});
+
+// --- mid-stream error payload classification --------------------------
+
+test("streamTurn: a mid-stream RESOURCE_EXHAUSTED error payload throws ProviderUnavailableError, is never retried, and the API key never leaks into the error message", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return sseResponse([
+      { candidates: [{ content: { parts: [{ text: "partial" }] } }] },
+      {
+        error: {
+          code: 429,
+          message: "Quota exceeded for key test-gemini-key-should-never-leak, please retry later.",
+          status: "RESOURCE_EXHAUSTED",
+        },
+      },
+    ]);
+  });
+
+  const provider = new GeminiProvider();
+  await assert.rejects(
+    () => collect(provider.streamTurn({ ...BASE_PARAMS, messages: [{ role: "user", content: "hi" }], tools: NO_TOOLS })),
+    (err: unknown) => {
+      assert.equal(err instanceof ProviderUnavailableError, true, "a mid-stream quota error must be the distinct unavailable-error type");
+      assert.match((err as Error).message, /RESOURCE_EXHAUSTED/);
+      assert.doesNotMatch((err as Error).message, /test-gemini-key-should-never-leak/, "the API key must never appear in the error message");
+      assert.match((err as Error).message, /\[redacted\]/, "the redacted placeholder must replace the key");
+      return true;
+    },
+  );
+  // Exactly one fetch call - a mid-stream error must never trigger a
+  // retry (that would duplicate the already-streamed "partial" text).
+  assert.equal(calls, 1);
+});
+
+test("streamTurn: a mid-stream UNAVAILABLE error payload (status only, no numeric code) is also classified as ProviderUnavailableError", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    sseResponse([{ error: { status: "UNAVAILABLE", message: "The model is overloaded." } }]),
+  );
+
+  const provider = new GeminiProvider();
+  await assert.rejects(
+    () => collect(provider.streamTurn({ ...BASE_PARAMS, messages: [{ role: "user", content: "hi" }], tools: NO_TOOLS })),
+    (err: unknown) => {
+      assert.equal(err instanceof ProviderUnavailableError, true);
+      assert.match((err as Error).message, /UNAVAILABLE/);
+      return true;
+    },
+  );
+});
+
+test("streamTurn: a mid-stream permanent error payload (e.g. INVALID_ARGUMENT) throws a plain Error, never ProviderUnavailableError", async (t) => {
+  t.mock.method(globalThis, "fetch", async () =>
+    sseResponse([{ error: { code: 400, status: "INVALID_ARGUMENT", message: "Malformed request." } }]),
+  );
+
+  const provider = new GeminiProvider();
+  await assert.rejects(
+    () => collect(provider.streamTurn({ ...BASE_PARAMS, messages: [{ role: "user", content: "hi" }], tools: NO_TOOLS })),
+    (err: unknown) => {
+      assert.equal(err instanceof ProviderUnavailableError, false, "a permanent mid-stream error must never be the retryable type");
+      assert.match((err as Error).message, /INVALID_ARGUMENT/);
+      return true;
+    },
+  );
 });
 
 test("streamTurn: a network-level fetch failure produces a generic, safe error", async (t) => {

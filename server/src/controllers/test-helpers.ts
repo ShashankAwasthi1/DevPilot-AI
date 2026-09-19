@@ -41,6 +41,13 @@ export function makeFakeResponse(): { res: Response; state: FakeResponseState } 
     end: () => {
       state.ended = true;
     },
+    // Mirrors real http.ServerResponse's own `writableEnded` - message.
+    // controller.ts's heartbeat interval checks this before every write,
+    // so a test can call res.end()-triggering code and then verify no
+    // further heartbeat write is attempted against an ended response.
+    get writableEnded() {
+      return state.ended;
+    },
   } as unknown as Response;
 
   return { res, state };

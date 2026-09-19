@@ -161,6 +161,58 @@ interface GeminiStreamChunk {
     content?: { role?: string; parts?: GeminiPart[] };
     finishReason?: string;
   }[];
+  // A trailing metadata-only chunk some models send as the true stream
+  // terminator, with no candidates of its own - legitimate, never an
+  // error (see isBenignCandidatelessChunk below).
+  usageMetadata?: unknown;
+  // Gemini's documented mid-stream error shape - never present alongside
+  // `candidates` in a normal chunk. See throwIfGeminiStreamError.
+  error?: { code?: number; message?: string; status?: string };
+}
+
+// A mid-stream error payload is Gemini's own way of reporting a failure
+// (including a rate-limit/quota cutoff) *after* the initial 200 OK that
+// fetchGeminiResponseWithRetry already accepted - by this point streaming
+// has begun and some text may already have reached the client, so this is
+// never retried here (retrying now would duplicate already-streamed
+// output - see fetchGeminiResponseWithRetry's own comment). Throwing
+// instead of silently skipping this chunk (the previous behavior) is the
+// actual fix: without it, a truncated response looked identical to a
+// genuinely complete one to every caller downstream (agent-runner.ts/
+// tool-loop.ts, and ultimately message.controller.ts's finalText/done
+// persistence).
+function throwIfGeminiStreamError(chunk: GeminiStreamChunk, apiKey: string): void {
+  const error = chunk.error;
+  if (!error) return;
+
+  const isTransient =
+    (typeof error.code === "number" && isRetryableGeminiStatus(error.code)) ||
+    error.status === "RESOURCE_EXHAUSTED" ||
+    error.status === "UNAVAILABLE";
+
+  // Same redaction/length-bound convention as safeReadBody - error.message
+  // is provider-supplied text and must never reach a log/error message
+  // unbounded or with the API key still in it, even though Gemini has no
+  // reason to ever echo the key back.
+  const safeMessage = (typeof error.message === "string" ? error.message : "(no message)")
+    .split(apiKey)
+    .join("[redacted]")
+    .slice(0, 500);
+  const fullMessage = `Gemini API returned a mid-stream error${error.status ? ` (${error.status})` : ""}: ${safeMessage}`;
+
+  if (isTransient) {
+    throw new ProviderUnavailableError(fullMessage);
+  }
+  throw new Error(fullMessage);
+}
+
+// True only for a chunk shape Gemini is known to legitimately send with no
+// `candidates` of its own - a final chunk carrying only cumulative
+// `usageMetadata`. Anything else with no candidates and no `error` field
+// is unrecognized and must not be silently treated as "nothing happened
+// this chunk" (see the loop in streamTurn).
+function isBenignCandidatelessChunk(chunk: GeminiStreamChunk): boolean {
+  return chunk.usageMetadata !== undefined;
 }
 
 export class GeminiProvider implements AIProvider {
@@ -226,8 +278,28 @@ export class GeminiProvider implements AIProvider {
     // response.body are both true - the non-null assertion just tells
     // TypeScript what that function's own control flow already guarantees.
     for await (const chunk of parseSseJsonStream(response.body!)) {
-      const candidate = (chunk as GeminiStreamChunk).candidates?.[0];
+      const streamChunk = chunk as GeminiStreamChunk;
+
+      // Detects and classifies a genuine mid-stream failure (never
+      // retried - see the function's own comment) before anything else.
+      throwIfGeminiStreamError(streamChunk, config.geminiApiKey);
+
+      if (!Array.isArray(streamChunk.candidates)) {
+        // Not a candidates-bearing chunk and not the one other
+        // recognized candidates-less shape (a trailing usageMetadata-only
+        // chunk) - an unrecognized/malformed chunk shape must never be
+        // silently skipped, since that's exactly what let a genuinely
+        // truncated stream masquerade as a complete, successful one
+        // before this fix.
+        if (isBenignCandidatelessChunk(streamChunk)) continue;
+        throw new Error("Gemini API returned an unexpected stream chunk");
+      }
+
+      const candidate = streamChunk.candidates[0];
       const parts = candidate?.content?.parts;
+      // A legitimate terminal chunk (e.g. one that only carries
+      // finishReason) has candidates but no text parts - this is normal,
+      // not an error, and must not throw.
       if (!parts) continue;
 
       for (const part of parts) {
