@@ -30,7 +30,11 @@ test("listActivityForProject: omitted limit preserves unbounded ascending behavi
   await listActivityForProject("u1", "p1");
   assert.deepEqual(
     findManyCalls[0],
-    { where: { projectId: "p1" }, orderBy: { createdAt: "asc" } },
+    {
+      where: { projectId: "p1" },
+      orderBy: { createdAt: "asc" },
+      include: { project: { select: { name: true } } },
+    },
     "omitting limit must reproduce the exact existing unbounded, ascending query - unchanged for the public GET /projects/:id/activity route",
   );
 
@@ -42,6 +46,7 @@ test("listActivityForProject: omitted limit preserves unbounded ascending behavi
       where: { projectId: "p1" },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 5,
+      include: { project: { select: { name: true } } },
     },
     "a provided limit must produce a DB-level bounded query, ordered deterministically by createdAt then id, newest first",
   );

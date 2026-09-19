@@ -48,6 +48,7 @@ export type ActivityType = "COMMENT_CREATED" | "DOCUMENT_CREATED" | "DOCUMENT_UP
 export interface ActivityItem {
   id: string;
   projectId: string;
+  projectName: string;
   taskId: string | null;
   actorId: string | null;
   type: ActivityType;

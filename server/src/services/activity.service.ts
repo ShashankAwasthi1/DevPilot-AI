@@ -10,9 +10,21 @@ export interface ActivityDto {
   type: ActivityType;
   metadata: Prisma.JsonValue;
   createdAt: Date;
+  // The dashboard's cross-project feed (listActivityForUser) needs this to
+  // tell activities from different projects apart - the project-scoped
+  // feed (listActivityForProject) doesn't need it (the caller already
+  // knows which project it's looking at) but every list query here joins
+  // the same `project: { select: { name: true } }` relation anyway, so
+  // toActivityDto stays a single function with one uniform DTO shape
+  // rather than two near-duplicate ones.
+  projectName: string;
 }
 
-function toActivityDto(activity: Activity): ActivityDto {
+// What every query below actually selects: the Activity row plus its
+// related project's name (never more of Project than that).
+type ActivityWithProjectName = Activity & { project: { name: string } };
+
+function toActivityDto(activity: ActivityWithProjectName): ActivityDto {
   return {
     id: activity.id,
     projectId: activity.projectId,
@@ -21,6 +33,7 @@ function toActivityDto(activity: Activity): ActivityDto {
     type: activity.type,
     metadata: activity.metadata,
     createdAt: activity.createdAt,
+    projectName: activity.project.name,
   };
 }
 
@@ -72,6 +85,7 @@ export async function listActivityForProject(
     const activities = await prisma.activity.findMany({
       where: { projectId },
       orderBy: { createdAt: "asc" },
+      include: { project: { select: { name: true } } },
     });
     return activities.map(toActivityDto);
   }
@@ -85,6 +99,7 @@ export async function listActivityForProject(
     where: { projectId },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,
+    include: { project: { select: { name: true } } },
   });
   return activities.map(toActivityDto);
 }
@@ -103,6 +118,7 @@ export async function listActivityForUser(userId: string, limit: number): Promis
     },
     orderBy: { createdAt: "desc" },
     take: limit,
+    include: { project: { select: { name: true } } },
   });
 
   return activities.map(toActivityDto);

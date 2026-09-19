@@ -11,10 +11,13 @@ import { useApiData } from "@/lib/use-api-data";
 import type { ActivityItem } from "@/lib/types";
 
 const ACTIVITY_LABEL: Record<string, string> = {
-  COMMENT_CREATED: "commented on a task",
-  DOCUMENT_CREATED: "created a document",
-  DOCUMENT_UPDATED: "updated a document",
-  DOCUMENT_ARCHIVED: "archived a document",
+  PROJECT_CREATED: "CREATED PROJECT",
+  TASK_CREATED: "CREATED TASK",
+  TASK_UPDATED: "UPDATED TASK",
+  COMMENT_CREATED: "ADDED COMMENT",
+  DOCUMENT_CREATED: "CREATED DOCUMENT",
+  DOCUMENT_UPDATED: "UPDATED DOCUMENT",
+  DOCUMENT_ARCHIVED: "ARCHIVED DOCUMENT",
 };
 
 export function ActivitySection() {
@@ -65,7 +68,13 @@ export function ActivitySection() {
             >
               <Card>
                 <CardContent className="flex items-center justify-between gap-4 py-3">
-                  <span className="text-sm">{ACTIVITY_LABEL[item.type] ?? item.type}</span>
+                  <span className="flex items-center gap-1.5 text-sm">
+                    <span>{ACTIVITY_LABEL[item.type] ?? item.type}</span>
+                    <span aria-hidden="true" className="text-muted-foreground">
+                      ·
+                    </span>
+                    <span className="text-xs text-muted-foreground">{item.projectName.toLowerCase()}</span>
+                  </span>
                   <span className="shrink-0 text-xs text-muted-foreground">
                     {formatRelativeTime(item.createdAt)}
                   </span>
