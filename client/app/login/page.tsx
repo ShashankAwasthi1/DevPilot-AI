@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, useReducedMotion } from "framer-motion";
 import { AlertCircle } from "lucide-react";
@@ -87,6 +88,13 @@ export default function LoginPage() {
               <Button type="submit" disabled={submitting} className="mt-2">
                 {submitting ? "Signing in…" : "Sign in"}
               </Button>
+
+              <p className="text-center text-sm text-muted-foreground">
+                Don&apos;t have an account?{" "}
+                <Link href="/signup" className="font-medium text-foreground underline-offset-4 hover:underline">
+                  Sign up
+                </Link>
+              </p>
             </form>
           </CardContent>
         </Card>
