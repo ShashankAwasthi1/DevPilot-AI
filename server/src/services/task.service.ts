@@ -1,6 +1,7 @@
 import { Prisma, Task, TaskPriority, TaskStatus } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
+import { recordActivity } from "./activity.service";
 import { createNotification } from "./notification.service";
 import { assertRole, getProjectAccess, ProjectRole } from "./project.service";
 import type { CreateTaskInput, UpdateTaskInput } from "../validation/task.validation";
@@ -144,9 +145,9 @@ export async function assertAssigneeIsProjectMember(projectId: string, assigneeI
 // from `input` (createTaskSchema doesn't even declare those fields) -
 // projectId is the caller-supplied route argument (already authorized via
 // getProjectAccess) and createdById is always the authenticated userId.
-// No Activity row is written here: ActivityType has no task-created
-// variant yet, and adding one would require a schema/migration change
-// that's explicitly out of scope for this part.
+// A TASK_CREATED Activity row is written through the same `client` as the
+// task write itself (see below), matching this function's own existing
+// convention for the assignee notification.
 //
 // `client` (Phase 25 Step 2) defaults to the plain `prisma` singleton, so
 // every existing caller (the REST route, and the CREATE_TASK confirm
@@ -186,6 +187,14 @@ export async function createTask(
       assigneeId: input.assigneeId,
       dueDate: toDueDate(input.dueDate),
     },
+  });
+
+  await recordActivity(client, {
+    projectId,
+    taskId: task.id,
+    actorId: userId,
+    type: "TASK_CREATED",
+    metadata: { taskId: task.id, projectId, actorId: userId },
   });
 
   // Notify the assignee, if any - but never notify someone of their own
@@ -251,6 +260,49 @@ export async function updateTask(
       dueDate: toDueDate(input.dueDate),
     },
   });
+
+  // A TASK_UPDATED Activity row is written only when at least one field
+  // genuinely changed value - an omitted field (undefined) is never a
+  // change (same "not part of this write" semantics the comment above
+  // this function already documents), and resending a field's existing
+  // value is a no-op, not a change, exactly like the assignee-notification
+  // guard below already treats it. This keeps the activity feed free of
+  // noise for updates that touch the wire format but not the data.
+  type ActivityChangeValue = string | Date | null;
+  const changes: Record<string, { from: ActivityChangeValue; to: ActivityChangeValue }> = {};
+  if (input.title !== undefined && input.title !== task.title) {
+    changes.title = { from: task.title, to: input.title };
+  }
+  if (input.description !== undefined && input.description !== task.description) {
+    changes.description = { from: task.description, to: input.description };
+  }
+  if (input.status !== undefined && input.status !== task.status) {
+    changes.status = { from: task.status, to: input.status };
+  }
+  if (input.priority !== undefined && input.priority !== task.priority) {
+    changes.priority = { from: task.priority, to: input.priority };
+  }
+  if (input.assigneeId !== undefined && input.assigneeId !== task.assigneeId) {
+    changes.assigneeId = { from: task.assigneeId, to: input.assigneeId };
+  }
+  const newDueDate = toDueDate(input.dueDate);
+  if (newDueDate !== undefined) {
+    const previousTime = task.dueDate ? task.dueDate.getTime() : null;
+    const nextTime = newDueDate ? newDueDate.getTime() : null;
+    if (previousTime !== nextTime) {
+      changes.dueDate = { from: task.dueDate, to: newDueDate };
+    }
+  }
+
+  if (Object.keys(changes).length > 0) {
+    await recordActivity(prisma, {
+      projectId,
+      taskId: task.id,
+      actorId: userId,
+      type: "TASK_UPDATED",
+      metadata: { taskId: task.id, projectId, actorId: userId, changes },
+    });
+  }
 
   // Notify the new assignee only when this update actually changes who is
   // assigned, to someone other than the caller. `input.assigneeId` is

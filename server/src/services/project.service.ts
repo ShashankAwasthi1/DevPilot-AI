@@ -1,6 +1,7 @@
 import { Project, ProjectMemberRole } from "@prisma/client";
 import { prisma } from "../config/prisma";
 import { AppError } from "../utils/AppError";
+import { recordActivity } from "./activity.service";
 import type { CreateProjectInput, UpdateProjectInput } from "../validation/project.validation";
 
 export type ProjectRole = "OWNER" | ProjectMemberRole;
@@ -91,6 +92,13 @@ export async function createProject(
       description: input.description,
       ownerId: userId,
     },
+  });
+
+  await recordActivity(prisma, {
+    projectId: project.id,
+    actorId: userId,
+    type: "PROJECT_CREATED",
+    metadata: { projectId: project.id, actorId: userId },
   });
 
   return toProjectDto(project, "OWNER");

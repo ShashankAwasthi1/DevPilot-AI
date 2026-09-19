@@ -12,6 +12,7 @@ const OUTSIDER_ID = "outsider-1";
 
 const updateCalls: { where: unknown; data: Record<string, unknown> }[] = [];
 const notificationCalls: { userId: string; type: string; metadata: Record<string, unknown> }[] = [];
+const activityCalls: { type: string; projectId: string; taskId?: string; actorId: string; metadata: unknown }[] = [];
 let projectAccessRole: string = "OWNER";
 // The pre-update task's assigneeId, as returned by getTaskAccess's own
 // prisma.task.findUnique lookup - mutable per test (like projectAccessRole
@@ -46,6 +47,16 @@ test("updateTask: an OWNER can update, and only the supplied fields are ever wri
         if (!allowed.includes(role)) {
           throw new AppError(403, "You do not have permission to perform this action");
         }
+      },
+    },
+  });
+  t.mock.module("./activity.service", {
+    namedExports: {
+      recordActivity: async (
+        _client: unknown,
+        args: { type: string; projectId: string; taskId?: string; actorId: string; metadata: unknown },
+      ) => {
+        activityCalls.push(args);
       },
     },
   });
@@ -302,4 +313,67 @@ test("updateTask: assigning to yourself never sends a notification", async () =>
   await updateTask(MEMBER_ID, REAL_TASK_ID, { assigneeId: MEMBER_ID });
 
   assert.equal(notificationCalls.length, before, "self-assignment must never trigger a notification");
+});
+
+test("updateTask: a genuine field change records a TASK_UPDATED activity capturing the before/after values", async () => {
+  const { updateTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  existingAssigneeId = null;
+  const before = activityCalls.length;
+
+  const result = await updateTask(REAL_USER_ID, REAL_TASK_ID, { status: "DONE", priority: "URGENT" });
+
+  assert.equal(activityCalls.length, before + 1, "exactly one activity row per update call, never one per field");
+  const activity = activityCalls[activityCalls.length - 1];
+  assert.equal(activity.type, "TASK_UPDATED");
+  assert.equal(activity.projectId, REAL_PROJECT_ID);
+  assert.equal(activity.taskId, REAL_TASK_ID);
+  assert.equal(activity.actorId, REAL_USER_ID);
+  assert.deepEqual(activity.metadata, {
+    taskId: REAL_TASK_ID,
+    projectId: REAL_PROJECT_ID,
+    actorId: REAL_USER_ID,
+    changes: {
+      status: { from: "TODO", to: "DONE" },
+      priority: { from: "MEDIUM", to: "URGENT" },
+    },
+  });
+  assert.equal(result.status, "DONE");
+});
+
+test("updateTask: resending a field's existing value (no actual change) never records a duplicate activity", async () => {
+  const { updateTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  existingAssigneeId = null;
+  const before = activityCalls.length;
+
+  // baseTaskRow() already has status "TODO" and priority "MEDIUM" - this
+  // resends the exact current values, same as an unrelated field being
+  // resubmitted unchanged by a client-side form.
+  await updateTask(REAL_USER_ID, REAL_TASK_ID, { status: "TODO", priority: "MEDIUM" });
+
+  assert.equal(activityCalls.length, before, "no genuine change means no activity row, never a noisy no-op entry");
+});
+
+test("updateTask: an update with no fields at all never records an activity", async () => {
+  const { updateTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  existingAssigneeId = null;
+  const before = activityCalls.length;
+
+  await updateTask(REAL_USER_ID, REAL_TASK_ID, {});
+
+  assert.equal(activityCalls.length, before);
+});
+
+test("updateTask: an unchanged dueDate (already null, resent as null) never records an activity", async () => {
+  const { updateTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  existingAssigneeId = null;
+  const before = activityCalls.length;
+
+  // baseTaskRow() already has dueDate: null.
+  await updateTask(REAL_USER_ID, REAL_TASK_ID, { dueDate: null });
+
+  assert.equal(activityCalls.length, before, "resending the same (null) dueDate must never count as a change");
 });

@@ -10,6 +10,7 @@ const OUTSIDER_ID = "outsider-1";
 
 const createCalls: { data: Record<string, unknown> }[] = [];
 const notificationCalls: { userId: string; type: string; metadata: Record<string, unknown> }[] = [];
+const activityCalls: { type: string; projectId: string; taskId?: string; actorId: string; metadata: unknown }[] = [];
 let projectAccessRole: string = "OWNER";
 let getProjectAccessCalls = 0;
 
@@ -28,6 +29,16 @@ test("createTask: an OWNER can create a task, and projectId/createdById come fro
         if (!allowed.includes(role)) {
           throw new AppError(403, "You do not have permission to perform this action");
         }
+      },
+    },
+  });
+  t.mock.module("./activity.service", {
+    namedExports: {
+      recordActivity: async (
+        _client: unknown,
+        args: { type: string; projectId: string; taskId?: string; actorId: string; metadata: unknown },
+      ) => {
+        activityCalls.push(args);
       },
     },
   });
@@ -357,6 +368,26 @@ test("createTask: given an explicit (transaction) client, writes the task AND it
   // call - no write is ever split across two different clients.
   assert.equal(createCalls.length, globalCreateCallsBefore);
   assert.equal(notificationCalls.length, globalNotificationCallsBefore);
+});
+
+test("createTask: successfully creating a task records a TASK_CREATED activity for the project", async () => {
+  const { createTask } = await import("./task.service");
+  projectAccessRole = "OWNER";
+  const before = activityCalls.length;
+
+  const result = await createTask(REAL_USER_ID, REAL_PROJECT_ID, {
+    title: "Task with activity",
+    status: "TODO",
+    priority: "MEDIUM",
+  });
+
+  assert.equal(activityCalls.length, before + 1);
+  const activity = activityCalls[activityCalls.length - 1];
+  assert.equal(activity.type, "TASK_CREATED");
+  assert.equal(activity.projectId, REAL_PROJECT_ID);
+  assert.equal(activity.taskId, result.id);
+  assert.equal(activity.actorId, REAL_USER_ID);
+  assert.deepEqual(activity.metadata, { taskId: result.id, projectId: REAL_PROJECT_ID, actorId: REAL_USER_ID });
 });
 
 test("createTask: with no client argument, behaves exactly as before (default prisma singleton), preserving backward compatibility", async () => {

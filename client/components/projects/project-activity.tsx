@@ -12,17 +12,29 @@ import { listProjectActivity } from "@/lib/activity";
 import { formatRelativeTime } from "@/lib/format";
 import type { ActivityItem, ActivityType, ProjectMember } from "@/lib/types";
 
-// Matches the currently supported ActivityType values exactly (see
-// server/src/services/comment.service.ts and document.service.ts, the only
-// two places any activity record is created) - never invents a new type,
-// same map as task-activity.tsx (kept duplicated rather than shared since
-// each is a small, self-contained presentational concern, same convention
-// this codebase already follows for dashboard/activity-section.tsx).
-const ACTIVITY_LABEL: Record<ActivityType, string> = {
+// Matches every ActivityType value the API can currently return (see
+// server/prisma/schema.prisma's ActivityType enum and its 5 writers:
+// comment.service.ts, document.service.ts, project.service.ts, and
+// task.service.ts's create/update) - never invents a new type, same map
+// as task-activity.tsx (kept duplicated rather than shared since each is a
+// small, self-contained presentational concern, same convention this
+// codebase already follows for dashboard/activity-section.tsx).
+//
+// The shared ActivityType in lib/types.ts still only lists the original 4
+// values, so this map's key type is widened locally to the full, real set
+// - activityLabel's parameter stays the narrower ActivityType so every
+// existing caller is unaffected, and a value this map doesn't yet know
+// about still falls back to the safe "Activity" string below.
+type KnownActivityType = ActivityType | "PROJECT_CREATED" | "TASK_CREATED" | "TASK_UPDATED";
+
+const ACTIVITY_LABEL: Record<KnownActivityType, string> = {
   COMMENT_CREATED: "Comment added",
   DOCUMENT_CREATED: "Document created",
   DOCUMENT_UPDATED: "Document updated",
   DOCUMENT_ARCHIVED: "Document archived",
+  PROJECT_CREATED: "Created project",
+  TASK_CREATED: "Created task",
+  TASK_UPDATED: "Updated task",
 };
 
 function activityLabel(type: ActivityType): string {
