@@ -235,11 +235,45 @@ npm run reindex -- --project=<PROJECT_ID>
 
 # Filters combine
 npm run reindex -- --status=FAILED --project=<PROJECT_ID>
+
+# Safe recovery for a document stuck PENDING after a crash (Phase 16D,
+# C1) - only PENDING documents last updated more than 10 minutes ago are
+# considered. The age filter exists specifically so this command never
+# retries a document that was saved moments ago and may still be
+# legitimately indexing right now (a normal create/update in progress,
+# not a crash) - only genuinely abandoned PENDING documents are swept.
+npm run reindex -- --status=PENDING --stale-after-minutes=10
 ```
 
-An unsupported `--status` value or an empty `--project=` value fails
-immediately with a clear message and a non-zero exit code, before any
-database query runs.
+An unsupported `--status` value, an empty `--project=` value, or an
+invalid `--stale-after-minutes` value (zero, negative, or non-numeric)
+fails immediately with a clear message and a non-zero exit code, before
+any database query runs. `--stale-after-minutes` is only accepted
+combined with `--status=PENDING` - it is a recovery tool for documents
+abandoned mid-indexing, not a general age filter for `READY`/`FAILED`
+documents, and is rejected otherwise.
+
+### Why a document can get stuck PENDING
+
+`indexDocument` (`document-indexing.service.ts`) deletes a document's old
+chunks and inserts its new ones inside a single, atomic database
+transaction - a normal exception (a failed embedding call, a database
+error mid-insert) can never leave chunks partially replaced; the
+transaction either fully commits or fully rolls back, and the existing
+try/catch always records `indexStatus: FAILED` when it does throw. The
+one gap this doesn't cover is a genuine process crash (an OOM kill, a
+deploy-triggered restart landing mid-transaction) - the process dies
+before either the indexing transaction commits or the `FAILED`-status
+catch block can run, leaving the document exactly as the preceding
+create/update transaction left it: new content already saved,
+`indexStatus: PENDING`, but chunks still reflecting the *previous*
+content (the transaction that would have replaced them never committed).
+Nothing retries this automatically - there is no cron/worker in this
+architecture - so `npm run reindex -- --status=PENDING
+--stale-after-minutes=<n>` is the manual recovery path: run it
+periodically (or after a known crash/restart) with a threshold generous
+enough that it never races a document that's still genuinely being
+indexed (minutes, not seconds - 10 is a reasonable default).
 
 ---
 
