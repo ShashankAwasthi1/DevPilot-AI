@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
+import { CircleX, Loader2 } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -33,6 +34,18 @@ export function DocDetailsSheet({ doc, trigger }: DocDetailsSheetProps) {
           <SheetDescription>
             Created {formatRelativeTime(doc.createdAt)} · Updated {formatRelativeTime(doc.updatedAt)}
           </SheetDescription>
+          {doc.indexStatus === "PENDING" && (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden="true" />
+              Indexing — this document isn&apos;t available to AI search yet.
+            </p>
+          )}
+          {doc.indexStatus === "FAILED" && (
+            <p className="flex items-center gap-1.5 text-xs text-destructive">
+              <CircleX className="size-3.5 shrink-0" aria-hidden="true" />
+              Indexing failed — this document couldn&apos;t be indexed and isn&apos;t available to AI search.
+            </p>
+          )}
         </SheetHeader>
         <div className="flex-1 overflow-y-auto px-4">
           <p className="whitespace-pre-wrap break-words text-sm text-foreground">{doc.content}</p>

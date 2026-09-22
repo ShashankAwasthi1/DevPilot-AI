@@ -139,6 +139,7 @@ export interface DocumentItem {
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  indexStatus: "PENDING" | "READY" | "FAILED";
 }
 
 // Mirrors server/src/services/comment.service.ts's CommentDto (Phase 20) -

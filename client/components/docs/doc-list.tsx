@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, type MouseEvent } from "react";
-import { Eye, FileText, Pencil, Trash2 } from "lucide-react";
+import { CircleX, Eye, FileText, Loader2, Pencil, Trash2 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -155,7 +156,24 @@ function DocRow({ doc, onUpdate, onArchive }: DocRowProps) {
           <div className="flex min-w-0 items-center gap-2">
             <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <div className="min-w-0">
-              <span className="block truncate text-sm font-medium">{doc.title}</span>
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-sm font-medium">{doc.title}</span>
+                {doc.indexStatus === "PENDING" && (
+                  <Badge variant="secondary" className="shrink-0">
+                    <Loader2 className="animate-spin" aria-hidden="true" />
+                    Indexing…
+                  </Badge>
+                )}
+                {doc.indexStatus === "FAILED" && (
+                  <Badge variant="destructive" className="shrink-0">
+                    <CircleX aria-hidden="true" />
+                    <span>
+                      Indexing failed
+                      <span className="sr-only"> — not available to AI search</span>
+                    </span>
+                  </Badge>
+                )}
+              </div>
               <span className="block text-xs text-muted-foreground">
                 Updated {formatRelativeTime(doc.updatedAt)}
               </span>
