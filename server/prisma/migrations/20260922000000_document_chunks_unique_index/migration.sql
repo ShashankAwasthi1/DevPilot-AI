@@ -1,0 +1,42 @@
+-- Phase 16D (C4): (documentId, chunkIndex) must be unique - each
+-- chunkIndex is exactly one position in one document's chunk sequence,
+-- and two rows racing for the same slot is corrupt data, never valid
+-- content. The existing indexDocument() delete-then-insert transaction
+-- (document-indexing.service.ts) does not, by itself, make this
+-- impossible under genuine concurrent execution: its optimistic-
+-- concurrency check only guards against a NEWER edit landing mid-run, not
+-- two truly concurrent indexing attempts that both captured the exact
+-- same document updatedAt. This constraint turns that race from a
+-- silent duplicate-data bug into a loud, already-handled transaction
+-- failure - the existing catch block in indexDocument() marks the
+-- document FAILED exactly as it already does for any other transaction
+-- failure, so no application code change is required alongside this
+-- migration.
+--
+-- SAFETY - READ BEFORE APPLYING TO PRODUCTION:
+-- CREATE UNIQUE INDEX below will FAIL (and this entire migration will be
+-- rolled back - Prisma runs each migration in a transaction) if any
+-- duplicate (documentId, chunkIndex) rows already exist. It will NEVER
+-- delete or modify any existing row - failure here is safe-by-default,
+-- not destructive. Before running `prisma migrate deploy` against
+-- production, verify there are no existing duplicates:
+--
+--   SELECT "documentId", "chunkIndex", COUNT(*)
+--   FROM document_chunks
+--   GROUP BY "documentId", "chunkIndex"
+--   HAVING COUNT(*) > 1;
+--
+-- If that query returns any rows, do NOT edit this migration to delete
+-- them automatically. Instead, for each affected documentId, re-run its
+-- indexing (e.g. re-save the document via the app, or
+-- `npm run reindex -- --project=<projectId>`) - indexDocument() deletes
+-- and fully replaces that document's chunks in one atomic transaction,
+-- which resolves the duplicates as a side effect of producing a correct,
+-- current chunk set. Re-run the verification query above until it
+-- returns zero rows, then apply this migration.
+
+-- DropIndex
+DROP INDEX "document_chunks_documentId_chunkIndex_idx";
+
+-- CreateIndex
+CREATE UNIQUE INDEX "document_chunks_documentId_chunkIndex_key" ON "document_chunks"("documentId", "chunkIndex");

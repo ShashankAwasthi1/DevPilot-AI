@@ -392,7 +392,24 @@ model DocumentChunk {
 
   embedding Unsupported("vector(384)")
 
-  @@index([documentId, chunkIndex])
+  // Phase 16D (C4): each chunkIndex is one specific position in one
+  // document's chunk sequence - two rows for the same (documentId,
+  // chunkIndex) is corrupt data, never valid content, and the existing
+  // indexDocument() delete-then-insert transaction (document-indexing.
+  // service.ts) does not, by itself, make this impossible under genuine
+  // concurrent execution (two indexing runs racing against the exact same
+  // captured updatedAt - see that file's own optimistic-concurrency
+  // comment, which only guards against a NEWER edit, not a truly
+  // concurrent identical one). A unique index turns that race from
+  // silent duplicate data into a loud, already-handled transaction
+  // failure (the existing catch block marks the document FAILED exactly
+  // as it does for any other transaction failure - see
+  // document-indexing.service.transaction-failure.test.ts). Replaces the
+  // previous plain @@index on the same two columns rather than adding a
+  // second one alongside it - a unique index already serves every
+  // lookup/ordering query the plain index did, so keeping both would
+  // just be a redundant, never-used extra index.
+  @@unique([documentId, chunkIndex])
   @@index([projectId])
   @@map("document_chunks")
 }
