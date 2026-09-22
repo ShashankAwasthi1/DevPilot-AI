@@ -122,6 +122,25 @@ export const updateTaskTool: ToolDefinition<z.infer<typeof schema>> = {
     // (never 403) for a nonexistent task or one outside the caller's
     // projects, before role is even considered.
     const { task, projectId, role } = await getTaskAccess(args.taskId, ctx.userId);
+
+    // C5: getTaskAccess only proves the CALLER has some role in whatever
+    // project the task actually belongs to - it says nothing about
+    // whether that's the SAME project this AI conversation is scoped to.
+    // Without this check, a user with access to two projects could have
+    // the AI in Project A's chat propose an update to a task that lives
+    // in Project B, purely because taskId is a model-supplied argument
+    // with no project of its own. ctx.projectId is never model-supplied
+    // (see tools/types.ts) - it's the conversation's own, server-derived
+    // project, so this comparison can't be influenced by the tool call
+    // itself. Checked before assertRole and reported as the identical
+    // 404 getTaskAccess already uses for a nonexistent task, so a
+    // cross-project task is indistinguishable from one that doesn't
+    // exist at all - never a 403, which would confirm the task exists
+    // somewhere the caller merely lacks sufficient role in.
+    if (projectId !== ctx.projectId) {
+      throw new AppError(404, "Task not found");
+    }
+
     assertRole(role, ["OWNER", "ADMIN", "MEMBER"]);
 
     // Only re-checked when the model is actually proposing a new,

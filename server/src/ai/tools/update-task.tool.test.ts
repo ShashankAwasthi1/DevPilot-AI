@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { AppError } from "../../utils/AppError";
 
 const REAL_PROJECT_ID = "project-1";
+const OTHER_PROJECT_ID = "project-2";
 const REAL_TASK_ID = "task-1";
 const REAL_USER_ID = "user-1";
 const CONVERSATION_ID = "conversation-1";
@@ -159,6 +160,101 @@ test("updateTask: VIEWER cannot propose an update, and no PendingTaskAction is c
   );
 
   assert.equal(spies.pendingActionCreateCalls().length, 0);
+});
+
+// --- Project-scope authorization (C5) -------------------------------------
+//
+// getTaskAccess alone only proves the caller has SOME role in whatever
+// project the task actually belongs to - it says nothing about whether
+// that's the same project the current AI conversation is scoped to.
+// taskId is a model-supplied argument with no project of its own, so
+// without this check a user with access to two projects could have the
+// AI in Project A's conversation propose an update to a task that
+// actually lives in Project B.
+
+test("security: a task belonging to a different project than the conversation is rejected as not-found, and no PendingTaskAction is created", async (t) => {
+  const taskRow = { ...baseTaskRow(), projectId: OTHER_PROJECT_ID };
+  const spies = mockModules(t, { role: "OWNER", taskRow });
+  const { updateTaskTool } = await importFreshTool();
+
+  await assert.rejects(
+    () =>
+      invoke(updateTaskTool, { taskId: REAL_TASK_ID, status: "DONE" }, {
+        userId: REAL_USER_ID,
+        projectId: REAL_PROJECT_ID, // the conversation's own project - NOT the task's
+        conversationId: CONVERSATION_ID,
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof AppError);
+      assert.equal(err.statusCode, 404);
+      assert.equal(err.message, "Task not found");
+      return true;
+    },
+  );
+
+  assert.equal(spies.pendingActionCreateCalls().length, 0, "a cross-project task must never produce a pending action");
+});
+
+test("security: the cross-project rejection is reported identically to a genuinely nonexistent task (same 404 status and message) - never a 403 that would confirm the task exists elsewhere", async (t) => {
+  const taskRow = { ...baseTaskRow(), projectId: OTHER_PROJECT_ID };
+  // VIEWER would normally fail assertRole with a 403 - if the project-scope
+  // check runs first (as it must), that 403 is never reached at all.
+  const spies = mockModules(t, { role: "VIEWER", taskRow });
+  const { updateTaskTool } = await importFreshTool();
+
+  await assert.rejects(
+    () =>
+      invoke(updateTaskTool, { taskId: REAL_TASK_ID, status: "DONE" }, {
+        userId: REAL_USER_ID,
+        projectId: REAL_PROJECT_ID,
+        conversationId: CONVERSATION_ID,
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof AppError);
+      assert.equal(err.statusCode, 404, "must be the same 404 a nonexistent task produces, never 403");
+      assert.equal(err.message, "Task not found");
+      return true;
+    },
+  );
+
+  assert.equal(spies.pendingActionCreateCalls().length, 0);
+});
+
+test("security: a genuinely nonexistent task is still rejected as not-found (existing getTaskAccess behavior, unchanged by the new project-scope check)", async (t) => {
+  const spies = mockModules(t, { role: "OWNER" });
+  const { updateTaskTool } = await importFreshTool();
+
+  await assert.rejects(
+    () =>
+      invoke(updateTaskTool, { taskId: "does-not-exist", status: "DONE" }, {
+        userId: REAL_USER_ID,
+        projectId: REAL_PROJECT_ID,
+        conversationId: CONVERSATION_ID,
+      }),
+    (err: unknown) => {
+      assert.ok(err instanceof AppError);
+      assert.equal(err.statusCode, 404);
+      assert.equal(err.message, "Task not found");
+      return true;
+    },
+  );
+
+  assert.equal(spies.pendingActionCreateCalls().length, 0);
+});
+
+test("security: a task in the SAME project as the conversation is unaffected by the new check and still succeeds (existing valid-update behavior preserved)", async (t) => {
+  const taskRow = { ...baseTaskRow(), projectId: REAL_PROJECT_ID };
+  const spies = mockModules(t, { role: "OWNER", taskRow });
+  const { updateTaskTool } = await importFreshTool();
+
+  const result = (await invoke(
+    updateTaskTool,
+    { taskId: REAL_TASK_ID, status: "DONE" },
+    { userId: REAL_USER_ID, projectId: REAL_PROJECT_ID, conversationId: CONVERSATION_ID },
+  )) as { result: { status: string } };
+
+  assert.equal(result.result.status, "pending_confirmation");
+  assert.equal(spies.pendingActionCreateCalls().length, 1);
 });
 
 // --- Invalid assignee ----------------------------------------------------
