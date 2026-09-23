@@ -147,9 +147,25 @@ class FakePrismaClientKnownRequestError extends Error {
 class FakePrismaClientRustPanicError extends Error {}
 class FakePrismaClientUnknownRequestError extends Error {}
 
-function mockPrismaClient(t: import("node:test").TestContext, queryRaw: () => Promise<unknown>) {
+// `handler` receives the exact `datasources.db.url` the diagnostic passed
+// to `new PrismaClient(...)` - this is what lets a single mock distinguish
+// the pooled call (DATABASE_URL) from the unpooled call
+// (DATABASE_URL_UNPOOLED) and answer each one differently, proving
+// prismaPooledProbe/prismaUnpooledProbe are genuinely two separate,
+// independently-configured Prisma engines rather than one probe's result
+// reused twice.
+function mockPrismaClient(
+  t: import("node:test").TestContext,
+  handler: (url: string | undefined) => Promise<unknown>,
+) {
   class FakePrismaClient {
-    $queryRaw = queryRaw;
+    private url: string | undefined;
+    constructor(options?: { datasources?: { db?: { url?: string } } }) {
+      this.url = options?.datasources?.db?.url;
+    }
+    $queryRaw() {
+      return handler(this.url);
+    }
     async $disconnect() {}
   }
 
@@ -166,33 +182,18 @@ function mockPrismaClient(t: import("node:test").TestContext, queryRaw: () => Pr
   });
 }
 
-test("getDiagnostics: prismaProbe reports success when the isolated PrismaClient's SELECT 1 resolves", async (t) => {
-  mockPrismaClient(t, async () => [{ "?column?": 1 }]);
-
-  await withEnv({ DIAGNOSTICS_TOKEN: "correct-token" }, async () => {
-    const req = makeFakeDiagRequest({ "x-diag-token": "correct-token" });
-    const { res, state } = makeFakeJsonResponse();
-
-    await getDiagnostics(req, res);
-
-    const data = (state.body as { data: Record<string, unknown> }).data;
-    assert.deepEqual(data.prismaProbe, { attempted: true, success: true });
-  });
-});
-
-test("getDiagnostics: prismaProbe reports a sanitized failure, with error class/code, when the isolated PrismaClient throws a TLS initialization error", async (t) => {
-  const secretPassword = "sUp3rSecretPassw0rd!";
-  mockPrismaClient(t, async () => {
-    throw new FakePrismaClientInitializationError(
-      `Error opening a TLS connection: OpenSSL error querying postgresql://dbuser:${secretPassword}@ep-abc-123.us-east-2.aws.neon.tech/devpilot?sslmode=require`,
-      "P1011",
-    );
+test("getDiagnostics: prismaPooledProbe and prismaUnpooledProbe each report success independently, from genuinely separate PrismaClient instances configured with their own datasource override", async (t) => {
+  const urlsSeen: (string | undefined)[] = [];
+  mockPrismaClient(t, async (url) => {
+    urlsSeen.push(url);
+    return [{ "?column?": 1 }];
   });
 
   await withEnv(
     {
       DIAGNOSTICS_TOKEN: "correct-token",
-      DATABASE_URL: `postgresql://dbuser:${secretPassword}@ep-abc-123.us-east-2.aws.neon.tech/devpilot?sslmode=require`,
+      DATABASE_URL: "postgresql://dbuser:secret-pooled@ep-pooled.neon.tech/devpilot?sslmode=require",
+      DATABASE_URL_UNPOOLED: "postgresql://dbuser:secret-direct@ep-direct.neon.tech/devpilot?sslmode=require",
     },
     async () => {
       const req = makeFakeDiagRequest({ "x-diag-token": "correct-token" });
@@ -201,64 +202,127 @@ test("getDiagnostics: prismaProbe reports a sanitized failure, with error class/
       await getDiagnostics(req, res);
 
       const data = (state.body as { data: Record<string, unknown> }).data;
-      const prismaProbe = data.prismaProbe as Record<string, unknown>;
-      assert.equal(prismaProbe.attempted, true);
-      assert.equal(prismaProbe.success, false);
-      assert.equal(prismaProbe.errorType, "PrismaClientInitializationError");
-      assert.equal(prismaProbe.errorCode, "P1011");
-      assert.equal(typeof prismaProbe.message, "string");
-      assert.equal((prismaProbe.message as string).includes(secretPassword), false);
-      assert.equal((prismaProbe.message as string).includes("postgresql://"), false);
-      assert.equal((prismaProbe.message as string).includes("Error opening a TLS connection"), true);
-
-      const serialized = JSON.stringify(state.body);
-      assert.equal(serialized.includes(secretPassword), false);
-      assert.equal(serialized.includes("postgresql://"), false);
+      assert.deepEqual(data.prismaPooledProbe, { attempted: true, success: true });
+      assert.deepEqual(data.prismaUnpooledProbe, { attempted: true, success: true });
+      // Each probe really was constructed with its own connection string,
+      // not the same one reused for both.
+      assert.deepEqual(urlsSeen, [
+        "postgresql://dbuser:secret-pooled@ep-pooled.neon.tech/devpilot?sslmode=require",
+        "postgresql://dbuser:secret-direct@ep-direct.neon.tech/devpilot?sslmode=require",
+      ]);
     },
   );
 });
 
-test("getDiagnostics: prismaProbe reports a known-request-error's code, still sanitized", async (t) => {
-  mockPrismaClient(t, async () => {
-    throw new FakePrismaClientKnownRequestError("Unique constraint failed on the fields: (`email`)", "P2002");
+test("getDiagnostics: prismaPooledProbe can fail while prismaUnpooledProbe succeeds, reported separately - isolating a pooler-specific failure", async (t) => {
+  mockPrismaClient(t, async (url) => {
+    if (url?.includes("ep-pooled")) {
+      throw new FakePrismaClientInitializationError(
+        "Error opening a TLS connection: OpenSSL error",
+        "P1011",
+      );
+    }
+    return [{ "?column?": 1 }];
   });
 
-  await withEnv({ DIAGNOSTICS_TOKEN: "correct-token" }, async () => {
-    const req = makeFakeDiagRequest({ "x-diag-token": "correct-token" });
-    const { res, state } = makeFakeJsonResponse();
+  await withEnv(
+    {
+      DIAGNOSTICS_TOKEN: "correct-token",
+      DATABASE_URL: "postgresql://dbuser:secret-pooled@ep-pooled.neon.tech/devpilot?sslmode=require",
+      DATABASE_URL_UNPOOLED: "postgresql://dbuser:secret-direct@ep-direct.neon.tech/devpilot?sslmode=require",
+    },
+    async () => {
+      const req = makeFakeDiagRequest({ "x-diag-token": "correct-token" });
+      const { res, state } = makeFakeJsonResponse();
 
-    await getDiagnostics(req, res);
+      await getDiagnostics(req, res);
 
-    const data = (state.body as { data: Record<string, unknown> }).data;
-    const prismaProbe = data.prismaProbe as Record<string, unknown>;
-    assert.equal(prismaProbe.errorType, "PrismaClientKnownRequestError");
-    assert.equal(prismaProbe.errorCode, "P2002");
-  });
+      const data = (state.body as { data: Record<string, unknown> }).data;
+      const pooled = data.prismaPooledProbe as Record<string, unknown>;
+      const unpooled = data.prismaUnpooledProbe as Record<string, unknown>;
+
+      assert.equal(pooled.success, false);
+      assert.equal(pooled.errorType, "PrismaClientInitializationError");
+      assert.equal(pooled.errorCode, "P1011");
+      assert.deepEqual(unpooled, { attempted: true, success: true });
+    },
+  );
 });
 
-test("getDiagnostics: existing token protection is unaffected by the new Prisma probe - wrong token still returns 404 without instantiating Prisma", async (t) => {
+test("getDiagnostics: a sanitized Prisma failure never leaks the embedded connection string or password, for either probe", async (t) => {
+  const pooledPassword = "pooled-Secret-1";
+  const unpooledPassword = "direct-Secret-2";
+  mockPrismaClient(t, async (url) => {
+    const isPooled = url?.includes("ep-pooled");
+    throw new FakePrismaClientInitializationError(
+      `Error opening a TLS connection: OpenSSL error querying postgresql://dbuser:${
+        isPooled ? pooledPassword : unpooledPassword
+      }@${isPooled ? "ep-pooled" : "ep-direct"}.neon.tech/devpilot?sslmode=require`,
+      "P1011",
+    );
+  });
+
+  await withEnv(
+    {
+      DIAGNOSTICS_TOKEN: "correct-token",
+      DATABASE_URL: `postgresql://dbuser:${pooledPassword}@ep-pooled.neon.tech/devpilot?sslmode=require`,
+      DATABASE_URL_UNPOOLED: `postgresql://dbuser:${unpooledPassword}@ep-direct.neon.tech/devpilot?sslmode=require`,
+    },
+    async () => {
+      const req = makeFakeDiagRequest({ "x-diag-token": "correct-token" });
+      const { res, state } = makeFakeJsonResponse();
+
+      await getDiagnostics(req, res);
+
+      const data = (state.body as { data: Record<string, unknown> }).data;
+      const pooled = data.prismaPooledProbe as Record<string, unknown>;
+      const unpooled = data.prismaUnpooledProbe as Record<string, unknown>;
+
+      assert.equal(pooled.errorType, "PrismaClientInitializationError");
+      assert.equal(pooled.errorCode, "P1011");
+      assert.equal((pooled.message as string).includes("Error opening a TLS connection"), true);
+      assert.equal(unpooled.errorType, "PrismaClientInitializationError");
+
+      const serialized = JSON.stringify(state.body);
+      assert.equal(serialized.includes(pooledPassword), false);
+      assert.equal(serialized.includes(unpooledPassword), false);
+      assert.equal(serialized.includes("postgresql://"), false);
+      assert.equal(serialized.includes("dbuser"), false);
+      assert.equal(serialized.includes("devpilot"), false);
+    },
+  );
+});
+
+test("getDiagnostics: existing token protection is unaffected by the pooled/unpooled probes - wrong token still returns 404 without instantiating Prisma at all", async (t) => {
   let called = false;
   mockPrismaClient(t, async () => {
     called = true;
     return [{ "?column?": 1 }];
   });
 
-  await withEnv({ DIAGNOSTICS_TOKEN: "correct-token" }, async () => {
-    const req = makeFakeDiagRequest({ "x-diag-token": "wrong-token" });
-    const { res, state } = makeFakeJsonResponse();
+  await withEnv(
+    {
+      DIAGNOSTICS_TOKEN: "correct-token",
+      DATABASE_URL: "postgresql://dbuser:secret@ep-pooled.neon.tech/devpilot",
+      DATABASE_URL_UNPOOLED: "postgresql://dbuser:secret@ep-direct.neon.tech/devpilot",
+    },
+    async () => {
+      const req = makeFakeDiagRequest({ "x-diag-token": "wrong-token" });
+      const { res, state } = makeFakeJsonResponse();
 
-    await getDiagnostics(req, res);
+      await getDiagnostics(req, res);
 
-    assert.equal(state.statusCode, 404);
-    assert.equal(called, false);
-  });
+      assert.equal(state.statusCode, 404);
+      assert.equal(called, false);
+    },
+  );
 });
 
-test("getDiagnostics: DATABASE_URL unset is reported as absent, not as an error, and no other section is skipped", async (t) => {
+test("getDiagnostics: DATABASE_URL/DATABASE_URL_UNPOOLED unset means both Prisma probes report attempted: false, with no other section skipped", async (t) => {
   // Mocked so this test never depends on real Prisma engine
-  // loading/validation behavior - it exercises safeConnectionMeta/tlsProbe
-  // with no DATABASE_URL, not the Prisma probe's own error handling
-  // (covered separately above).
+  // loading/validation behavior - it exercises the "absent env var" branch
+  // of probePrismaDatasource, not its error-handling branch (covered
+  // separately above).
   mockPrismaClient(t, async () => [{ "?column?": 1 }]);
 
   await withEnv(
@@ -274,8 +338,10 @@ test("getDiagnostics: DATABASE_URL unset is reported as absent, not as an error,
       assert.deepEqual(data.databaseUrl, { present: false });
       assert.deepEqual(data.databaseUrlUnpooled, { present: false });
       assert.deepEqual(data.tlsProbe, { attempted: false });
+      assert.deepEqual(data.prismaPooledProbe, { attempted: false });
+      assert.deepEqual(data.prismaUnpooledProbe, { attempted: false });
       // The OS-level probes still run and report something (available or
-      // not) - DATABASE_URL being absent never short-circuits the rest of
+      // not) - both env vars being absent never short-circuits the rest of
       // the response.
       assert.equal(typeof (data.opensslVersion as Record<string, unknown>).available, "boolean");
       assert.equal(typeof (data.prismaEngineFiles as Record<string, unknown>).available, "boolean");

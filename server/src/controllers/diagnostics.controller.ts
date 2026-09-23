@@ -180,14 +180,18 @@ function probeTls(hostname: string, port: number): Promise<TlsProbeResult> {
   });
 }
 
-// G. A real Prisma query, isolated from the app's own singleton. This
-// PrismaClient is created and destroyed entirely within this function - it
-// never touches, replaces, or shares a connection with `config/prisma.ts`'s
-// singleton (the one the rest of the app, and getReadiness, actually use).
-// Its sole purpose is to answer one question Node's raw `tls.connect()`
-// probe above cannot: does Prisma's own engine (which speaks the Postgres
-// wire protocol on top of its own TLS/connection handling, not just a bare
-// TLS handshake) succeed against the exact same DATABASE_URL.
+// G. Real Prisma queries, isolated from the app's own singleton. Each
+// PrismaClient is created and destroyed entirely within a single call to
+// probePrismaDatasource below - neither ever touches, replaces, or shares a
+// connection with `config/prisma.ts`'s singleton (the one the rest of the
+// app, and getReadiness, actually use). Their purpose is to answer two
+// questions Node's raw `tls.connect()` probe above can't: does Prisma's own
+// engine (which speaks the Postgres wire protocol on top of its own TLS/
+// connection handling, not just a bare TLS handshake) succeed against
+// DATABASE_URL (Neon's pooled/PgBouncer endpoint, prismaPooledProbe) and,
+// separately, against DATABASE_URL_UNPOOLED (Neon's direct endpoint,
+// prismaUnpooledProbe) - isolating whether a failure is specific to Neon's
+// pooler or affects Prisma's connection to Neon generally.
 //
 // Imported dynamically (never a static top-level `import { PrismaClient }
 // from "@prisma/client"`) for the same reason ai/providers/anthropic.
@@ -282,18 +286,29 @@ function classifyPrismaError(
   return { errorType, errorCode, message: sanitizeErrorMessage(rawMessage) };
 }
 
-async function probePrisma(): Promise<PrismaProbeResult> {
+// Probes ONE specific connection string via Prisma's own engine, using the
+// standard `datasources.db.url` constructor override - never schema.prisma,
+// never an environment variable, and never `config/prisma.ts`'s singleton
+// (a completely separate PrismaClient instance is created and destroyed
+// here every call). This is what lets prismaPooledProbe and
+// prismaUnpooledProbe below run against DATABASE_URL and
+// DATABASE_URL_UNPOOLED side by side, isolating whether a failure is
+// specific to Neon's pooled/PgBouncer endpoint or affects Prisma's TLS
+// connection to Neon generally.
+async function probePrismaDatasource(url: string | undefined): Promise<PrismaProbeResult> {
+  if (!url) return { attempted: false };
+
   const { PrismaClient, Prisma: prismaNamespace } = await import("@prisma/client");
   // Declared before the try so `finally` can still disconnect even if
   // `new PrismaClient()` itself is what throws - kept inside the try/catch
   // below (never called unguarded) so a synchronous construction failure
-  // (e.g. a malformed DATABASE_URL) is reported the same sanitized way as
-  // any other probe failure, rather than rejecting this function and
+  // (e.g. a malformed connection string) is reported the same sanitized way
+  // as any other probe failure, rather than rejecting this function and
   // crashing the whole diagnostic route with an unhandled 500.
   let client: InstanceType<typeof PrismaClient> | undefined;
 
   try {
-    client = new PrismaClient();
+    client = new PrismaClient({ datasources: { db: { url } } });
     await withTimeout(client.$queryRaw`SELECT 1`, PRISMA_PROBE_TIMEOUT_MS);
     return { attempted: true, success: true };
   } catch (err) {
@@ -318,7 +333,13 @@ export async function getDiagnostics(req: Request, res: Response): Promise<void>
     tlsProbe = await probeTls(databaseUrlMeta.hostname, port);
   }
 
-  const prismaProbe = await probePrisma();
+  // Run sequentially, not in parallel: two concurrent temporary
+  // PrismaClient instances independently opening connections is an
+  // unnecessary complication for a one-off diagnostic call, and keeping
+  // this simple matters more here than shaving a few seconds off a route
+  // nobody but an operator ever calls.
+  const prismaPooledProbe = await probePrismaDatasource(process.env.DATABASE_URL);
+  const prismaUnpooledProbe = await probePrismaDatasource(process.env.DATABASE_URL_UNPOOLED);
 
   res.status(200).json({
     status: "ok",
@@ -329,7 +350,8 @@ export async function getDiagnostics(req: Request, res: Response): Promise<void>
       databaseUrl: databaseUrlMeta,
       databaseUrlUnpooled: databaseUrlUnpooledMeta,
       tlsProbe,
-      prismaProbe,
+      prismaPooledProbe,
+      prismaUnpooledProbe,
     },
   });
 }
