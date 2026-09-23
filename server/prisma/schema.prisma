@@ -5,6 +5,18 @@
 generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["postgresqlExtensions"]
+  // Render's Node 22 runtime is a Debian 12 (OpenSSL 3.0.x) image. Without
+  // an explicit target, Prisma falls back to "native" auto-detection at
+  // `prisma generate` time (run via postinstall on every Render build),
+  // which has been observed to bundle an engine linked against the wrong
+  // OpenSSL ABI on Debian images that ship multiple libssl variants side
+  // by side - producing PrismaClientInitializationError: "Error opening a
+  // TLS connection: OpenSSL error" against Neon despite a healthy
+  // database and correct connection string. Pinning the exact target
+  // guarantees the correct pre-built engine ships regardless of
+  // auto-detection. "native" is kept so local generate/dev on any OS
+  // (e.g. macOS) still works unchanged.
+  binaryTargets   = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
