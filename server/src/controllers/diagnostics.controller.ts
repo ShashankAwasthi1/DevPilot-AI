@@ -180,6 +180,129 @@ function probeTls(hostname: string, port: number): Promise<TlsProbeResult> {
   });
 }
 
+// G. A real Prisma query, isolated from the app's own singleton. This
+// PrismaClient is created and destroyed entirely within this function - it
+// never touches, replaces, or shares a connection with `config/prisma.ts`'s
+// singleton (the one the rest of the app, and getReadiness, actually use).
+// Its sole purpose is to answer one question Node's raw `tls.connect()`
+// probe above cannot: does Prisma's own engine (which speaks the Postgres
+// wire protocol on top of its own TLS/connection handling, not just a bare
+// TLS handshake) succeed against the exact same DATABASE_URL.
+//
+// Imported dynamically (never a static top-level `import { PrismaClient }
+// from "@prisma/client"`) for the same reason ai/providers/anthropic.
+// provider.ts's SDK import is dynamic: Node's `t.mock.module()` can only
+// intercept a specifier's *first* evaluation, and "@prisma/client" is
+// almost certainly already loaded for real elsewhere in this process
+// (config/prisma.ts) well before this file's tests run - a static import
+// here could never be mocked. A dynamic import performed at call time is
+// intercepted by whatever mock is registered at that moment, regardless of
+// when this controller module itself was first imported.
+interface PrismaProbeResult {
+  attempted: boolean;
+  success?: boolean;
+  errorType?: string;
+  errorCode?: string;
+  message?: string;
+}
+
+const PRISMA_PROBE_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Prisma probe timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+// Strips anything credential-shaped before an error message is ever
+// returned in a response. Two layers: (1) the exact current value of
+// DATABASE_URL/DATABASE_URL_UNPOOLED, in case Prisma echoes it verbatim,
+// and (2) a generic postgres(ql):// URL pattern, in case a differently-
+// formed or partially-transformed connection string appears instead (e.g.
+// Prisma sometimes logs a normalized/re-encoded version of the original
+// URL, not a byte-for-byte copy of the env var). Also capped in length -
+// Prisma initialization errors can be long, and this route must never
+// become a stack-trace/internal-detail leak.
+const MAX_SANITIZED_MESSAGE_LENGTH = 500;
+
+function sanitizeErrorMessage(message: string): string {
+  let sanitized = message;
+
+  for (const envVarName of ["DATABASE_URL", "DATABASE_URL_UNPOOLED"] as const) {
+    const raw = process.env[envVarName];
+    if (raw) sanitized = sanitized.split(raw).join("[redacted]");
+  }
+
+  sanitized = sanitized.replace(/postgres(?:ql)?:\/\/[^\s"')]+/gi, "postgres://[redacted]");
+
+  if (sanitized.length > MAX_SANITIZED_MESSAGE_LENGTH) {
+    sanitized = `${sanitized.slice(0, MAX_SANITIZED_MESSAGE_LENGTH)}…(truncated)`;
+  }
+
+  return sanitized;
+}
+
+// `prismaNamespace` is whatever the dynamic `import("@prisma/client")`
+// above resolved to in THIS call - passed in explicitly (never imported a
+// second time) so an `instanceof` check here always compares against the
+// exact same class reference the thrown error was constructed from, real
+// or mocked.
+function classifyPrismaError(
+  err: unknown,
+  prismaNamespace: typeof import("@prisma/client").Prisma,
+): { errorType: string; errorCode?: string; message: string } {
+  const rawMessage = err instanceof Error ? err.message : String(err);
+  let errorType = "UnknownError";
+  let errorCode: string | undefined;
+
+  if (err instanceof prismaNamespace.PrismaClientInitializationError) {
+    errorType = "PrismaClientInitializationError";
+    errorCode = err.errorCode;
+  } else if (err instanceof prismaNamespace.PrismaClientKnownRequestError) {
+    errorType = "PrismaClientKnownRequestError";
+    errorCode = err.code;
+  } else if (err instanceof prismaNamespace.PrismaClientRustPanicError) {
+    errorType = "PrismaClientRustPanicError";
+  } else if (err instanceof prismaNamespace.PrismaClientUnknownRequestError) {
+    errorType = "PrismaClientUnknownRequestError";
+  } else if (err instanceof Error) {
+    errorType = err.constructor.name;
+  }
+
+  return { errorType, errorCode, message: sanitizeErrorMessage(rawMessage) };
+}
+
+async function probePrisma(): Promise<PrismaProbeResult> {
+  const { PrismaClient, Prisma: prismaNamespace } = await import("@prisma/client");
+  // Declared before the try so `finally` can still disconnect even if
+  // `new PrismaClient()` itself is what throws - kept inside the try/catch
+  // below (never called unguarded) so a synchronous construction failure
+  // (e.g. a malformed DATABASE_URL) is reported the same sanitized way as
+  // any other probe failure, rather than rejecting this function and
+  // crashing the whole diagnostic route with an unhandled 500.
+  let client: InstanceType<typeof PrismaClient> | undefined;
+
+  try {
+    client = new PrismaClient();
+    await withTimeout(client.$queryRaw`SELECT 1`, PRISMA_PROBE_TIMEOUT_MS);
+    return { attempted: true, success: true };
+  } catch (err) {
+    return { attempted: true, success: false, ...classifyPrismaError(err, prismaNamespace) };
+  } finally {
+    if (client) await client.$disconnect().catch(() => undefined);
+  }
+}
+
 export async function getDiagnostics(req: Request, res: Response): Promise<void> {
   if (!isAuthorized(req)) {
     sendNotFound(req, res);
@@ -195,6 +318,8 @@ export async function getDiagnostics(req: Request, res: Response): Promise<void>
     tlsProbe = await probeTls(databaseUrlMeta.hostname, port);
   }
 
+  const prismaProbe = await probePrisma();
+
   res.status(200).json({
     status: "ok",
     data: {
@@ -204,6 +329,7 @@ export async function getDiagnostics(req: Request, res: Response): Promise<void>
       databaseUrl: databaseUrlMeta,
       databaseUrlUnpooled: databaseUrlUnpooledMeta,
       tlsProbe,
+      prismaProbe,
     },
   });
 }
