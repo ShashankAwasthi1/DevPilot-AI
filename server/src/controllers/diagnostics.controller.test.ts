@@ -83,14 +83,22 @@ test("getDiagnostics: a token of a different length than expected also returns 4
   });
 });
 
-test("getDiagnostics: correct token returns 200 with a safe diagnostic payload, never the password, username, or full connection string", async () => {
+test("getDiagnostics: correct token returns 200 with a safe diagnostic payload, never the password, username, or full connection string", async (t) => {
+  // Mocked so this test never depends on real Neon-adapter/network
+  // behavior - it exercises safeConnectionMeta's sanitization, not the
+  // Prisma probes' own success/failure handling (covered separately
+  // below).
+  mockPrismaClient(t, async () => [{ "?column?": 1 }]);
+
   const secretPassword = "sUp3rSecretPassw0rd!";
   await withEnv(
     {
       DIAGNOSTICS_TOKEN: "correct-token",
       // localhost:1 fails fast (ECONNREFUSED on loopback, no DNS lookup) so
       // this test never depends on outbound network access or waits out the
-      // probe's 5s timeout.
+      // probe's 5s timeout - kept even though the Prisma probes themselves
+      // are mocked above, since probeTls (Node's own tls.connect probe)
+      // still runs for real against this same host/port.
       DATABASE_URL: `postgresql://dbuser:${secretPassword}@localhost:1/devpilot?sslmode=require&channel_binding=require`,
       DATABASE_URL_UNPOOLED: `postgresql://dbuser:${secretPassword}@localhost:1/devpilot?sslmode=require`,
     },
@@ -147,21 +155,32 @@ class FakePrismaClientKnownRequestError extends Error {
 class FakePrismaClientRustPanicError extends Error {}
 class FakePrismaClientUnknownRequestError extends Error {}
 
-// `handler` receives the exact `datasources.db.url` the diagnostic passed
-// to `new PrismaClient(...)` - this is what lets a single mock distinguish
-// the pooled call (DATABASE_URL) from the unpooled call
-// (DATABASE_URL_UNPOOLED) and answer each one differently, proving
-// prismaPooledProbe/prismaUnpooledProbe are genuinely two separate,
-// independently-configured Prisma engines rather than one probe's result
-// reused twice.
+// `handler` receives the exact connection string the diagnostic passed to
+// `new PrismaNeon({ connectionString })`, threaded through the fake
+// adapter's `.connectionString` field into `new PrismaClient({ adapter })`
+// - this is what lets a single mock distinguish the pooled call
+// (DATABASE_URL) from the unpooled call (DATABASE_URL_UNPOOLED) and answer
+// each one differently, proving prismaPooledProbe/prismaUnpooledProbe are
+// genuinely two separate, independently-configured Prisma clients rather
+// than one probe's result reused twice. Mocks the full adapter chain
+// (`@prisma/client`, `@prisma/adapter-neon`, `@neondatabase/serverless`,
+// `ws`) so no test in this file ever opens a real network connection or
+// depends on a real WebSocket implementation.
 function mockPrismaClient(
   t: import("node:test").TestContext,
   handler: (url: string | undefined) => Promise<unknown>,
 ) {
+  class FakePrismaNeon {
+    connectionString: string | undefined;
+    constructor(config?: { connectionString?: string }) {
+      this.connectionString = config?.connectionString;
+    }
+  }
+
   class FakePrismaClient {
     private url: string | undefined;
-    constructor(options?: { datasources?: { db?: { url?: string } } }) {
-      this.url = options?.datasources?.db?.url;
+    constructor(options?: { adapter?: FakePrismaNeon }) {
+      this.url = options?.adapter?.connectionString;
     }
     $queryRaw() {
       return handler(this.url);
@@ -180,9 +199,23 @@ function mockPrismaClient(
       },
     },
   });
+
+  t.mock.module("@prisma/adapter-neon", {
+    namedExports: { PrismaNeon: FakePrismaNeon },
+  });
+
+  t.mock.module("@neondatabase/serverless", {
+    // A plain settable property is enough - probePrismaDatasource only
+    // ever assigns to it, nothing in this test file reads it back.
+    namedExports: { neonConfig: { webSocketConstructor: undefined } },
+  });
+
+  t.mock.module("ws", {
+    defaultExport: class FakeWebSocket {},
+  });
 }
 
-test("getDiagnostics: prismaPooledProbe and prismaUnpooledProbe each report success independently, from genuinely separate PrismaClient instances configured with their own datasource override", async (t) => {
+test("getDiagnostics: prismaPooledProbe and prismaUnpooledProbe each report success independently, from genuinely separate PrismaClient instances configured with their own Neon adapter connection string", async (t) => {
   const urlsSeen: (string | undefined)[] = [];
   mockPrismaClient(t, async (url) => {
     urlsSeen.push(url);

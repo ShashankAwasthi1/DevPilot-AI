@@ -286,29 +286,45 @@ function classifyPrismaError(
   return { errorType, errorCode, message: sanitizeErrorMessage(rawMessage) };
 }
 
-// Probes ONE specific connection string via Prisma's own engine, using the
-// standard `datasources.db.url` constructor override - never schema.prisma,
-// never an environment variable, and never `config/prisma.ts`'s singleton
-// (a completely separate PrismaClient instance is created and destroyed
-// here every call). This is what lets prismaPooledProbe and
-// prismaUnpooledProbe below run against DATABASE_URL and
-// DATABASE_URL_UNPOOLED side by side, isolating whether a failure is
-// specific to Neon's pooled/PgBouncer endpoint or affects Prisma's TLS
-// connection to Neon generally.
+// Probes ONE specific connection string through the SAME transport
+// config/prisma.ts's real singleton now uses - the `@prisma/adapter-neon`
+// driver adapter over `@neondatabase/serverless`, never Prisma's native
+// engine's own `datasources.db.url` override (which is exactly the
+// transport confirmed broken on Render against both Neon endpoints). Using
+// the same adapter here is deliberate: it's what makes a pooled-vs-direct
+// comparison meaningful post-migration, and it also means this probe
+// doubles as a live check that the adapter transport itself is working for
+// the connection string application code actually relies on. Never
+// schema.prisma, never `config/prisma.ts`'s own singleton/pool - a
+// completely separate PrismaClient (and Neon Pool) is created and
+// destroyed here every call.
 async function probePrismaDatasource(url: string | undefined): Promise<PrismaProbeResult> {
   if (!url) return { attempted: false };
 
   const { PrismaClient, Prisma: prismaNamespace } = await import("@prisma/client");
+  const { PrismaNeon } = await import("@prisma/adapter-neon");
+  const { neonConfig } = await import("@neondatabase/serverless");
+  const { default: WebSocketImpl } = await import("ws");
+
+  // Same as config/prisma.ts: Node has no native WebSocket global
+  // compatible with what `@neondatabase/serverless`'s Pool expects, so `ws`
+  // must be supplied explicitly. Idempotent to set again here even though
+  // config/prisma.ts already sets it at import time elsewhere in the app -
+  // this function must not assume import order or that it's the first
+  // thing in the process to touch neonConfig.
+  neonConfig.webSocketConstructor = WebSocketImpl;
+
   // Declared before the try so `finally` can still disconnect even if
-  // `new PrismaClient()` itself is what throws - kept inside the try/catch
-  // below (never called unguarded) so a synchronous construction failure
-  // (e.g. a malformed connection string) is reported the same sanitized way
-  // as any other probe failure, rather than rejecting this function and
-  // crashing the whole diagnostic route with an unhandled 500.
+  // construction itself throws - kept inside the try/catch below (never
+  // called unguarded) so a synchronous construction failure (e.g. a
+  // malformed connection string) is reported the same sanitized way as any
+  // other probe failure, rather than rejecting this function and crashing
+  // the whole diagnostic route with an unhandled 500.
   let client: InstanceType<typeof PrismaClient> | undefined;
 
   try {
-    client = new PrismaClient({ datasources: { db: { url } } });
+    const adapter = new PrismaNeon({ connectionString: url });
+    client = new PrismaClient({ adapter });
     await withTimeout(client.$queryRaw`SELECT 1`, PRISMA_PROBE_TIMEOUT_MS);
     return { attempted: true, success: true };
   } catch (err) {
