@@ -3,6 +3,7 @@ import authRoutes from "./auth.routes";
 import commentRoutes from "./comment.routes";
 import conversationRoutes from "./conversation.routes";
 import dashboardRoutes from "./dashboard.routes";
+import diagnosticsRoutes from "./diagnostics.routes";
 import documentRoutes from "./document.routes";
 import healthRoutes from "./health.routes";
 import notificationRoutes from "./notification.routes";
@@ -13,6 +14,9 @@ import userRoutes from "./user.routes";
 const router = Router();
 
 router.use(healthRoutes);
+// TEMPORARY - see diagnostics.controller.ts. Remove once the Prisma/
+// Render/Neon TLS investigation concludes.
+router.use(diagnosticsRoutes);
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
 router.use("/projects", projectRoutes);
