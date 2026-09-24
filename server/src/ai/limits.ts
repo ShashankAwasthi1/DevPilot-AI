@@ -59,6 +59,14 @@ export const AI_LIMITS = {
   // expiresAt at confirm time (see the Phase 19 Step 3 design); no cleanup
   // job required for correctness.
   PENDING_TASK_ACTION_TTL_MS: 15 * 60 * 1000,
+  // Phase 22 Step 5 - the maximum number of PendingTaskAction rows a single
+  // user may have simultaneously PENDING (across every conversation/
+  // project) before a new proposal is rejected. Confirmed/cancelled/
+  // expired rows never count - only genuinely open, still-actionable
+  // proposals do. Conservative enough that no real user hits it during
+  // normal review-and-confirm usage, low enough to bound unbounded
+  // proposal accumulation.
+  MAX_OPEN_PENDING_ACTIONS: 20,
   // Phase 25 (AI-generated project plan) - the maximum number of tasks a
   // single generateProjectPlan proposal may contain, enforced by the
   // tool's own Zod schema (.max()) before a PendingTaskAction row is ever

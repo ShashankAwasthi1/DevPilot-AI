@@ -46,9 +46,22 @@ export interface CreatePendingTaskActionParams {
 // the caller (create-task.tool.ts / update-task.tool.ts), reusing
 // project.service.ts's/task.service.ts's existing functions, so this
 // service has exactly one job: create the row.
+// Phase 22 Step 5 - only counts rows still genuinely open (status PENDING);
+// CONFIRMED/CANCELLED/EXPIRED rows are resolved and never count against the
+// cap, regardless of how many of those a user has accumulated over time.
+const TOO_MANY_PENDING_ACTIONS_MESSAGE =
+  "You have too many pending proposals awaiting confirmation. Please confirm or cancel some before proposing more";
+
 export async function createPendingTaskAction(
   params: CreatePendingTaskActionParams,
 ): Promise<PendingTaskAction> {
+  const openCount = await prisma.pendingTaskAction.count({
+    where: { userId: params.userId, status: "PENDING" },
+  });
+  if (openCount >= AI_LIMITS.MAX_OPEN_PENDING_ACTIONS) {
+    throw new AppError(429, TOO_MANY_PENDING_ACTIONS_MESSAGE);
+  }
+
   return prisma.pendingTaskAction.create({
     data: {
       conversationId: params.conversationId,
