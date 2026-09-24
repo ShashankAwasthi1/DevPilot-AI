@@ -12,7 +12,7 @@ import {
   confirmPendingTaskAction,
 } from "../controllers/pending-task-action.controller";
 import { requireAuth } from "../middleware/auth.middleware";
-import { aiChatLimiter, apiLimiter } from "../middleware/rate-limit";
+import { aiChatLimiter, apiLimiter, conversationCreationLimiter } from "../middleware/rate-limit";
 import { validate } from "../middleware/validate";
 import {
   createConversationSchema,
@@ -22,10 +22,17 @@ import {
 
 const router = Router();
 
+// conversationCreationLimiter runs in addition to apiLimiter, not instead
+// of it - a tighter, purpose-built budget on top of the general one, same
+// pattern as aiChatLimiter's relationship to apiLimiter on other routes
+// (see the comment on POST .../messages below). Only this route gets it:
+// listing/renaming/deleting a conversation, and posting a message, are
+// unaffected.
 router.post(
   "/:projectId/conversations",
   requireAuth,
   apiLimiter,
+  conversationCreationLimiter,
   validate(createConversationSchema),
   createConversation,
 );

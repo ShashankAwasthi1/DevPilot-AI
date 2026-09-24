@@ -344,6 +344,76 @@ test("apiLimiter: reads the authenticated req.user.id, and never silently falls 
   assert.ok(calls[0] instanceof Error, "a missing req.user must be forwarded as an error, not silently handled");
 });
 
+// --- conversationCreationLimiter: user-keyed, additive on top of apiLimiter --
+
+test("conversationCreationLimiter: requests below the limit (30/15min) all call next() with no error", async () => {
+  const { conversationCreationLimiter } = await importFreshRateLimit();
+  const req = makeFakeUserRequest("user-h", "198.51.100.40");
+
+  for (let i = 0; i < 29; i++) {
+    const { res, state } = makeFakeResponse();
+    const { next, calls } = capturingNext();
+    await conversationCreationLimiter(req, res, next);
+    assert.equal(calls[0], undefined, `request ${i + 1} must call next() with no error`);
+    assert.equal(state.sent, false);
+  }
+});
+
+test("conversationCreationLimiter: the request exceeding the limit (30/15min) receives a 429 with the same JSON error envelope", async () => {
+  const { conversationCreationLimiter } = await importFreshRateLimit();
+  const req = makeFakeUserRequest("user-i", "198.51.100.41");
+
+  let lastState: FakeResponseState | undefined;
+  for (let i = 0; i < 31; i++) {
+    const { res, state } = makeFakeResponse();
+    const { next } = capturingNext();
+    await conversationCreationLimiter(req, res, next);
+    lastState = state;
+  }
+
+  assert.equal(lastState?.statusCode, 429);
+  assert.deepEqual(lastState?.body, RATE_LIMIT_ERROR_BODY);
+});
+
+test("conversationCreationLimiter: different req.user.id values are isolated into independent buckets, even from the identical req.ip", async () => {
+  const { conversationCreationLimiter } = await importFreshRateLimit();
+  const sameIp = "198.51.100.42";
+  const reqUserA = makeFakeUserRequest("user-j", sameIp);
+  const reqUserB = makeFakeUserRequest("user-k", sameIp);
+
+  for (let i = 0; i < 31; i++) {
+    const { res } = makeFakeResponse();
+    const { next } = capturingNext();
+    await conversationCreationLimiter(reqUserA, res, next);
+  }
+  const { res: aRes, state: aState } = makeFakeResponse();
+  await conversationCreationLimiter(reqUserA, aRes, capturingNext().next);
+  assert.equal(aState.statusCode, 429, "user A must be blocked after exceeding their own limit");
+
+  const { res: bRes, state: bState } = makeFakeResponse();
+  const { next: bNext, calls: bCalls } = capturingNext();
+  await conversationCreationLimiter(reqUserB, bRes, bNext);
+  assert.equal(bCalls[0], undefined, "a different user id must not share user A's exhausted bucket");
+  assert.equal(bState.sent, false);
+});
+
+test("conversationCreationLimiter: reads the authenticated req.user.id, and never silently falls back to IP when req.user is missing", async () => {
+  const { conversationCreationLimiter } = await importFreshRateLimit();
+  // requireAuth is guaranteed to run first on this route (see
+  // conversation.routes.ts) - a missing req.user here represents a
+  // middleware-ordering bug, and must surface as an error via next(err),
+  // never silently degrade to IP-keying, matching apiLimiter/aiChatLimiter's
+  // own documented convention above.
+  const reqWithNoUser = makeFakeUserRequest(undefined, "198.51.100.43");
+
+  const { res } = makeFakeResponse();
+  const { next, calls } = capturingNext();
+  await conversationCreationLimiter(reqWithNoUser, res, next);
+
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0] instanceof Error, "a missing req.user must be forwarded as an error, not silently handled");
+});
+
 // --- fresh instance per test -------------------------------------------------
 
 test("importing a fresh copy of the module yields brand-new limiter instances with no shared state", async () => {

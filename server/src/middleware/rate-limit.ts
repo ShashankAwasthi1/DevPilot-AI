@@ -69,3 +69,23 @@ export const apiLimiter = rateLimit({
   limit: 200,
   keyGenerator: (req: Request) => req.user!.id,
 });
+
+// Phase 22 Step 2: conversation *creation* specifically, on top of (never
+// instead of) apiLimiter - a dedicated, tighter budget so a runaway client
+// or script can't spam empty Conversation rows even while comfortably
+// within the general 200/15min API budget every other project/task/
+// document endpoint shares. 30/15min per authenticated user is generous
+// for genuine usage (nobody starts 30 new chats in 15 minutes) while
+// bounding row growth. Deliberately does NOT gate GET/PATCH/DELETE on
+// conversations, or POST .../messages (which already has its own
+// purpose-built aiChatLimiter bounding LLM spend) - see
+// conversation.routes.ts, where this is mounted only on the creation
+// route. Same authenticated-user keying convention as apiLimiter/
+// aiChatLimiter - never IP, so one shared office IP never means one
+// shared quota.
+export const conversationCreationLimiter = rateLimit({
+  ...SHARED_OPTIONS,
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  keyGenerator: (req: Request) => req.user!.id,
+});
