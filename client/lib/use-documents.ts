@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ApiError } from "./api";
 import {
   archiveDocument as archiveDocumentRequest,
@@ -13,6 +13,12 @@ import {
 } from "./documents";
 import { useApiData } from "./use-api-data";
 import type { DocumentItem } from "./types";
+
+// How often to re-check a still-PENDING document while indexing might be
+// in progress in the background - conservative for a SaaS UI (nobody
+// needs sub-second freshness here), short enough that a badge doesn't look
+// stuck for long after indexing actually finishes.
+const PENDING_POLL_INTERVAL_MS = 3000;
 
 export interface UseDocumentsOptions {
   limit?: number;
@@ -54,6 +60,43 @@ export function useDocuments(projectId: string, options: UseDocumentsOptions = {
   const refresh = useCallback(() => {
     setRefreshKey((key) => key + 1);
   }, []);
+
+  // `loading` is read from inside the interval callback below, which
+  // closes over whatever `loading` was when the interval was created -
+  // a ref keeps it current across renders without recreating the interval
+  // on every loading change (that would just be a second, redundant way
+  // to gate polling on top of the check inside the callback itself).
+  const loadingRef = useRef(loading);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
+
+  // Freshness for the indexing-status badges (doc-list.tsx/
+  // doc-details-sheet.tsx): a document just created/edited starts PENDING
+  // and only ever becomes READY/FAILED once backend indexing finishes in
+  // the background - with no push mechanism, the only way to observe that
+  // transition is to refetch. Reuses `refresh()` (the exact same
+  // refreshKey-bump `useApiData` already reacts to) rather than a second,
+  // competing fetch path - so this automatically refetches from whichever
+  // endpoint (list or search) and query is currently active, the same way
+  // a manual refresh/create/update/archive already does.
+  const hasPendingDocument = data?.some((doc) => doc.indexStatus === "PENDING") ?? false;
+
+  useEffect(() => {
+    if (!hasPendingDocument) return;
+
+    const interval = setInterval(() => {
+      // Skip a tick rather than queue up a second overlapping request if
+      // the previous refresh (or the initial load) hasn't resolved yet.
+      if (!loadingRef.current) refresh();
+    }, PENDING_POLL_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+    // Re-runs whenever `hasPendingDocument` flips - starting the interval
+    // the moment a PENDING document first appears, and (via this effect's
+    // own cleanup) stopping it the moment none remain, with no separate
+    // "should I still be polling" check needed inside the callback.
+  }, [hasPendingDocument, refresh]);
 
   const createDocument = useCallback(
     async (input: CreateDocumentInput) => {
