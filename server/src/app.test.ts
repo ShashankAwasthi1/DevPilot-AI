@@ -157,3 +157,43 @@ test("app: two separate requests receive two different X-Request-ID values", asy
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+// Phase 24 Step 2: full-stack check that requestId -> accessLog -> route ->
+// response all actually compose correctly through the real app, not just
+// each middleware in isolation (already covered by access-log.test.ts).
+test("app: a real request produces both an X-Request-ID header and a correlated access-log line, with the query string excluded", async (t) => {
+  const router = Router();
+  router.get("/test", (_req, res) => res.status(200).json({ status: "ok", data: null }));
+  t.mock.module("./routes", { defaultExport: router });
+
+  const logCalls: unknown[][] = [];
+  t.mock.method(console, "log", (...args: unknown[]) => {
+    logCalls.push(args);
+  });
+
+  const { default: app } = await importFreshApp();
+  const server = app.listen(0);
+  try {
+    const { port } = server.address() as AddressInfo;
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/test?secret=should-not-appear`);
+    assert.equal(res.status, 200);
+
+    const id = res.headers.get("x-request-id");
+    assert.ok(id, "X-Request-ID header must be present");
+
+    assert.equal(logCalls.length, 1, "exactly one access-log line for this one request");
+    const [line] = logCalls[0];
+    assert.equal(typeof line, "string");
+    const logLine = line as string;
+
+    assert.ok(logLine.includes(`requestId=${id}`), "the access log must carry the exact same request id as the response header");
+    assert.match(logLine, /method=GET\b/);
+    assert.match(logLine, /path=\/api\/v1\/test\b/);
+    assert.match(logLine, /status=200\b/);
+    assert.match(logLine, /durationMs=\d+\b/);
+    assert.equal(logLine.includes("secret=should-not-appear"), false, "the query string must never appear in the access log");
+    assert.equal(logLine.includes("?"), false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

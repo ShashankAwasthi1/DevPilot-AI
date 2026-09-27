@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { env } from "./config/env";
+import { accessLog } from "./middleware/access-log";
 import { errorHandler } from "./middleware/errorHandler";
 import { notFoundHandler } from "./middleware/notFoundHandler";
 import { requestId } from "./middleware/request-id";
@@ -20,6 +21,12 @@ app.disable("x-powered-by");
 // X-Request-ID header, and every downstream handler (notFoundHandler,
 // errorHandler, any route) can read req.requestId.
 app.use(requestId);
+
+// Mounted immediately after requestId, before helmet/cors/body-parsing/
+// routes, so every request - success, 404, or error alike - gets exactly
+// one access-log line, and that line can always read the request ID the
+// middleware above just set.
+app.use(accessLog);
 
 // The deployment target is a single Node process behind exactly one
 // reverse-proxy hop (Render/Fly/Railway-style platform, per
