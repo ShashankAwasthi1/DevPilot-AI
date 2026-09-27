@@ -5,6 +5,7 @@ import helmet from "helmet";
 import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
 import { notFoundHandler } from "./middleware/notFoundHandler";
+import { requestId } from "./middleware/request-id";
 import routes from "./routes";
 
 const app = express();
@@ -13,6 +14,12 @@ const app = express();
 // zero-dependency framework-fingerprinting reduction (Express sets this
 // by default on every response otherwise).
 app.disable("x-powered-by");
+
+// Mounted before everything else (helmet, cors, body-parsing, routes) so
+// every response this app ever sends - success, 404, or error - carries an
+// X-Request-ID header, and every downstream handler (notFoundHandler,
+// errorHandler, any route) can read req.requestId.
+app.use(requestId);
 
 // The deployment target is a single Node process behind exactly one
 // reverse-proxy hop (Render/Fly/Railway-style platform, per
