@@ -29,6 +29,17 @@ import ws from "ws";
 neonConfig.webSocketConstructor = ws;
 
 function createPrismaClient(): PrismaClient {
+  // E2E-only escape hatch: a local Postgres database has no Neon-style
+  // WebSocket proxy, so the adapter below would try to reach one at
+  // wss://<DATABASE_URL host>/v2 and fail with ECONNREFUSED. NODE_ENV=test
+  // is exactly (and only) how client/e2e's local E2E backend is started
+  // (see server/.env.e2e.example) - every other environment, including
+  // plain local dev against a real Neon dev branch, is completely
+  // unaffected and keeps using the adapter below exactly as before.
+  if (process.env.NODE_ENV === "test") {
+    return new PrismaClient();
+  }
+
   // `connectionString` here is intentionally `DATABASE_URL` (Neon's pooled
   // endpoint) - the same runtime connection string the app has always
   // used. `DATABASE_URL_UNPOOLED` remains exclusively a Prisma CLI/
