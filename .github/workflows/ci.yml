@@ -42,6 +42,70 @@ jobs:
       - name: Build
         run: npm run build
 
+  e2e:
+    name: E2E
+    runs-on: ubuntu-latest
+    # Independent of the client/server jobs on purpose - no `needs:`, so a
+    # slower/flakier browser-driven run never delays their fast feedback,
+    # and neither job's behavior is affected by this one existing.
+    services:
+      postgres:
+        # Postgres 16 with pgvector precompiled - schema.prisma's `vector`
+        # extension (see prisma/migrations/.../add_document_chunks_pgvector)
+        # isn't available on the stock postgres image. Pinned to pg16, not
+        # latest, so an upstream image change can't silently break this job.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: devpilot
+          POSTGRES_PASSWORD: devpilot
+          POSTGRES_DB: devpilot_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # A dedicated, ephemeral, local-to-this-job database - never Neon,
+      # never a production credential/secret. NODE_ENV=test is what makes
+      # server/src/config/prisma.ts use a plain PrismaClient here instead
+      # of the production-only Neon adapter (which expects a Neon-style
+      # WebSocket proxy and would fail against this plain Postgres
+      # service).
+      NODE_ENV: test
+      DATABASE_URL: postgresql://devpilot:devpilot@localhost:5432/devpilot_e2e
+      DATABASE_URL_UNPOOLED: postgresql://devpilot:devpilot@localhost:5432/devpilot_e2e
+      CORS_ORIGIN: http://localhost:3000
+      NEXT_PUBLIC_API_URL: http://localhost:8080/api/v1
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Apply database migrations
+        working-directory: server
+        run: npx prisma migrate deploy
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: client
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        working-directory: client
+        run: npm run test:e2e
+
   server:
     name: Server
     runs-on: ubuntu-latest
