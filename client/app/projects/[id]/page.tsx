@@ -3,8 +3,9 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { FileText, MessageSquare, Settings, Users } from "lucide-react";
+import { FileText, MessageSquare, SearchX, Settings, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ProjectActivity } from "@/components/projects/project-activity";
 import { CreateTaskSheet } from "@/components/tasks/create-task-sheet";
@@ -39,7 +40,7 @@ export default function ProjectWorkspacePage() {
     }
   }, [authLoading, authError, router]);
 
-  const { data: project, loading: projectLoading, error: projectError } = useApiData(
+  const { data: project, loading: projectLoading } = useApiData(
     () => api.get<{ project: ProjectSummary }>(`/projects/${projectId}`).then((res) => res.project),
     [projectId],
   );
@@ -74,6 +75,35 @@ export default function ProjectWorkspacePage() {
     );
   }
 
+  // The backend returns an identical 404 whether the project genuinely
+  // doesn't exist or the current user just isn't a member of it (never
+  // leaking which, to avoid confirming a project's existence to a
+  // non-member). Once the project fetch has settled with nothing to show,
+  // stop here rather than falling through to task/member/activity UI that
+  // has nothing valid to operate on.
+  if (!projectLoading && !project) {
+    return (
+      <main className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-10 sm:px-6">
+        <div className="mx-auto w-full max-w-sm py-10">
+          <Card>
+            <CardHeader className="items-center text-center">
+              <SearchX className="size-8 text-muted-foreground" aria-hidden="true" />
+              <CardTitle className="text-xl">Project not found</CardTitle>
+              <CardDescription>
+                This project doesn&apos;t exist, or you no longer have access to it.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Button type="button" variant="outline" className="w-full" asChild>
+                <Link href="/dashboard">Go to Dashboard</Link>
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-10 sm:px-6">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -81,9 +111,6 @@ export default function ProjectWorkspacePage() {
           {projectLoading && <Skeleton className="h-7 w-48" />}
           {!projectLoading && project && (
             <h1 className="truncate text-lg font-semibold text-foreground">{project.name}</h1>
-          )}
-          {!projectLoading && !project && projectError && (
-            <h1 className="text-lg font-semibold text-foreground">Project</h1>
           )}
           <p className="text-sm text-muted-foreground">Tasks</p>
         </div>

@@ -1,8 +1,10 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Activity as ActivityIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
@@ -22,10 +24,20 @@ const ACTIVITY_LABEL: Record<string, string> = {
 
 export function ActivitySection() {
   const prefersReducedMotion = useReducedMotion();
+  // Self-contained refreshKey-bump-then-refetch, same idiom used by
+  // useTasks/useProjectMembers/useProjects for their own Retry buttons -
+  // kept local here rather than lifted to a dedicated hook since nothing
+  // else needs this section's data (unlike Projects, which shares its
+  // fetch with DashboardHeader's "Create Project" refresh).
+  const [refreshKey, setRefreshKey] = useState(0);
   const { data, loading, error } = useApiData(
     () => api.get<{ activity: ActivityItem[] }>("/dashboard/activity"),
-    [],
+    [refreshKey],
   );
+
+  const handleRetry = useCallback(() => {
+    setRefreshKey((key) => key + 1);
+  }, []);
 
   return (
     <section aria-labelledby="activity-heading" className="flex flex-col gap-3">
@@ -44,7 +56,12 @@ export function ActivitySection() {
       {!loading && error && (
         <Alert variant="destructive">
           <AlertTitle>Couldn&apos;t load recent activity</AlertTitle>
-          <AlertDescription>{error.message}</AlertDescription>
+          <AlertDescription className="flex flex-col items-start gap-2">
+            <span>{error.message}</span>
+            <Button type="button" variant="outline" size="sm" onClick={handleRetry}>
+              Retry
+            </Button>
+          </AlertDescription>
         </Alert>
       )}
 
