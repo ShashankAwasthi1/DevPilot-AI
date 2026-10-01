@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { API_URL } from "./api";
 import { confirmPendingTaskAction, cancelPendingTaskAction } from "./pending-actions";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -23,7 +24,7 @@ test("confirmPendingTaskAction: POSTs to the exact confirm endpoint with no requ
 
   assert.equal(
     String(capturedUrl),
-    "http://localhost:8080/api/v1/projects/project-1/conversations/conversation-1/actions/action-1/confirm",
+    `${API_URL}/projects/project-1/conversations/conversation-1/actions/action-1/confirm`,
   );
   assert.equal(capturedInit?.method, "POST");
   assert.equal(capturedInit?.body, undefined, "confirm sends no request body");
@@ -110,7 +111,7 @@ test("cancelPendingTaskAction: POSTs to the exact cancel endpoint with no reques
 
   assert.equal(
     String(capturedUrl),
-    "http://localhost:8080/api/v1/projects/project-1/conversations/conversation-1/actions/action-1/cancel",
+    `${API_URL}/projects/project-1/conversations/conversation-1/actions/action-1/cancel`,
   );
   assert.equal(capturedInit?.method, "POST");
   assert.equal(capturedInit?.body, undefined, "cancel sends no request body");

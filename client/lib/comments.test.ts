@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { API_URL } from "./api";
 import { createTaskComment, listTaskComments } from "./comments";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -25,7 +26,7 @@ test("listTaskComments: GETs /tasks/:taskId/comments (no projectId segment) and 
 
   const comments = await listTaskComments("task-1");
 
-  assert.equal(String(capturedUrl), "http://localhost:8080/api/v1/tasks/task-1/comments");
+  assert.equal(String(capturedUrl), `${API_URL}/tasks/task-1/comments`);
   assert.equal(capturedInit?.method, "GET");
   assert.deepEqual(comments, [
     { id: "c1", taskId: "task-1", authorId: "user-1", body: "First", createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },
@@ -68,7 +69,7 @@ test("createTaskComment: POSTs { body } to /tasks/:taskId/comments and returns t
 
   const comment = await createTaskComment("task-1", "New comment");
 
-  assert.equal(String(capturedUrl), "http://localhost:8080/api/v1/tasks/task-1/comments");
+  assert.equal(String(capturedUrl), `${API_URL}/tasks/task-1/comments`);
   assert.equal(capturedInit?.method, "POST");
   assert.equal(capturedInit?.body, JSON.stringify({ body: "New comment" }));
   assert.deepEqual(comment, {

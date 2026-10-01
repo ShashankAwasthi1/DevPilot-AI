@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { API_URL } from "./api";
 import { listProjectActivity } from "./activity";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -33,7 +34,7 @@ test("listProjectActivity: GETs /projects/:id/activity and returns the unwrapped
 
   const activity = await listProjectActivity("project-1");
 
-  assert.equal(String(capturedUrl), "http://localhost:8080/api/v1/projects/project-1/activity");
+  assert.equal(String(capturedUrl), `${API_URL}/projects/project-1/activity`);
   assert.equal(capturedInit?.method, "GET");
   assert.deepEqual(activity, [
     {

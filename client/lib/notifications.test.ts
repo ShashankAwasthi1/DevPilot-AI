@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { API_URL } from "./api";
 import { listNotifications, markAllNotificationsAsRead, markNotificationAsRead } from "./notifications";
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -27,7 +28,7 @@ test("listNotifications: GETs /notifications with no query string when called wi
 
   const result = await listNotifications();
 
-  assert.equal(String(capturedUrl), "http://localhost:8080/api/v1/notifications");
+  assert.equal(String(capturedUrl), `${API_URL}/notifications`);
   assert.equal(capturedInit?.method, "GET");
   assert.deepEqual(result, {
     notifications: [
@@ -50,7 +51,7 @@ test("listNotifications: builds the correct query string from limit/cursor/unrea
 
   assert.equal(
     String(capturedUrl),
-    "http://localhost:8080/api/v1/notifications?limit=5&cursor=abc&unreadOnly=true",
+    `${API_URL}/notifications?limit=5&cursor=abc&unreadOnly=true`,
   );
 });
 
@@ -89,7 +90,7 @@ test("markNotificationAsRead: PATCHes /notifications/:id/read with no body, and 
 
   const notification = await markNotificationAsRead("n1");
 
-  assert.equal(String(capturedUrl), "http://localhost:8080/api/v1/notifications/n1/read");
+  assert.equal(String(capturedUrl), `${API_URL}/notifications/n1/read`);
   assert.equal(capturedInit?.method, "PATCH");
   assert.equal(capturedInit?.body, undefined, "no request body is sent");
   assert.deepEqual(notification, {
@@ -125,7 +126,7 @@ test("markAllNotificationsAsRead: POSTs to /notifications/read-all with no body,
 
   const result = await markAllNotificationsAsRead();
 
-  assert.equal(String(capturedUrl), "http://localhost:8080/api/v1/notifications/read-all");
+  assert.equal(String(capturedUrl), `${API_URL}/notifications/read-all`);
   assert.equal(capturedInit?.method, "POST");
   assert.equal(capturedInit?.body, undefined, "no request body is sent");
   assert.deepEqual(result, { updatedCount: 3 });
